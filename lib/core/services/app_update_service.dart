@@ -85,7 +85,7 @@ class AppUpdateInfo {
 class AppUpdateService {
   static const String currentAppVersion = '2.5.4';
   static const String _keyPortalUrl = 'ramsawit_portal_update_url';
-  static const String defaultPortalUrl = 'http://localhost:8080';
+  static const String defaultPortalUrl = 'https://ramsawit-portal.vercel.app';
 
   final SharedPreferences? _prefs;
 
