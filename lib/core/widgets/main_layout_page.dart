@@ -165,14 +165,17 @@ class _MainLayoutPageState extends ConsumerState<MainLayoutPage> {
         ),
         drawer: Drawer(
           backgroundColor: AppColors.canvas,
-          child: Column(
-            children: [
-              _buildDrawerHeader(userProfile),
-              Expanded(
-                child: ListView(
-                  padding: EdgeInsets.zero,
-                  children: [
-                    _buildSectionTitle('PEMBELIAN DARI PETANI'),
+          child: SafeArea(
+            top: false,
+            bottom: true,
+            child: Column(
+              children: [
+                _buildDrawerHeader(userProfile, context),
+                Expanded(
+                  child: ListView(
+                    padding: const EdgeInsets.only(bottom: 28.0),
+                    children: [
+                      _buildSectionTitle('PEMBELIAN DARI PETANI'),
                     _SidebarItem(
                       icon: Icons.dashboard_outlined,
                       label: 'Dashboard Analitik',
@@ -310,14 +313,15 @@ class _MainLayoutPageState extends ConsumerState<MainLayoutPage> {
                       title: const Text('Keluar Sesi', style: TextStyle(color: AppColors.error, fontWeight: FontWeight.w600)),
                       onTap: _handleSignOut,
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 24),
                   ],
                 ),
               ),
             ],
           ),
         ),
-        body: pages[_selectedIndex],
+      ),
+      body: pages[_selectedIndex],
         bottomNavigationBar: BottomNavigationBar(
           currentIndex: _getMobileBottomNavIndex(_selectedIndex),
           onTap: (index) {
@@ -678,9 +682,10 @@ class _MainLayoutPageState extends ConsumerState<MainLayoutPage> {
     return 4; // Menu lainnya
   }
 
-  Widget _buildDrawerHeader(dynamic userProfile) {
+  Widget _buildDrawerHeader(dynamic userProfile, BuildContext context) {
+    final topPadding = MediaQuery.paddingOf(context).top;
     return Container(
-      padding: const EdgeInsets.fromLTRB(20, 48, 20, 20),
+      padding: EdgeInsets.fromLTRB(20, topPadding > 0 ? topPadding + 10 : 48, 20, 20),
       color: AppColors.surface1,
       child: Row(
         children: [

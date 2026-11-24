@@ -218,37 +218,41 @@ class _AiAnalyticsPageState extends ConsumerState<AiAnalyticsPage> {
               maxChildSize: 0.95,
               expand: false,
               builder: (_, scrollController) {
-                return SingleChildScrollView(
-                  controller: scrollController,
-                  padding: const EdgeInsets.all(16.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text(
-                            'METRIK & WAWASAN OPERASIONAL',
-                            style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700,
-                              color: AppColors.ink,
+                return SafeArea(
+                  top: false,
+                  bottom: true,
+                  child: SingleChildScrollView(
+                    controller: scrollController,
+                    padding: const EdgeInsets.fromLTRB(16.0, 16.0, 16.0, 24.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text(
+                              'METRIK & WAWASAN OPERASIONAL',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.ink,
+                              ),
                             ),
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.close, size: 20),
-                            onPressed: () => Navigator.pop(ctx),
-                          ),
-                        ],
-                      ),
-                      const Divider(color: AppColors.hairline),
-                      const SizedBox(height: 12),
-                      AiKpiOverviewCards(overview: currentState.kpiOverview),
-                      const SizedBox(height: 16),
-                      _buildFilterBar(currentState, currentController),
-                      const SizedBox(height: 12),
-                      _buildInsightsList(currentState, currentController),
-                    ],
+                            IconButton(
+                              icon: const Icon(Icons.close, size: 20),
+                              onPressed: () => Navigator.pop(ctx),
+                            ),
+                          ],
+                        ),
+                        const Divider(color: AppColors.hairline),
+                        const SizedBox(height: 12),
+                        AiKpiOverviewCards(overview: currentState.kpiOverview),
+                        const SizedBox(height: 16),
+                        _buildFilterBar(currentState, currentController),
+                        const SizedBox(height: 12),
+                        _buildInsightsList(currentState, currentController),
+                      ],
+                    ),
                   ),
                 );
               },
