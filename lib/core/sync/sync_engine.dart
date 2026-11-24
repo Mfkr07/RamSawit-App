@@ -86,7 +86,7 @@ class SyncEngine extends StateNotifier<SyncEngineState> {
     SupabaseClient? client = _supabase;
     if (client == null) {
       try {
-        if (SupabaseConfig.isConfigured) {
+        if (SupabaseConfig.isConfigured && Supabase.instance.isInitialized) {
           client = Supabase.instance.client;
         }
       } catch (_) {
@@ -94,11 +94,16 @@ class SyncEngine extends StateNotifier<SyncEngineState> {
       }
     }
 
-    if (client == null || !SupabaseConfig.isConfigured) {
+    // Periksa apakah koneksi Supabase siap DAN memiliki sesi pengguna terautentikasi
+    final hasAuthSession = client?.auth.currentSession != null;
+
+    if (client == null || !SupabaseConfig.isConfigured || !hasAuthSession) {
       final count = await refreshUnsyncedCount();
       state = state.copyWith(
         status: SyncStatus.offline,
-        errorMessage: 'Sinkronisasi gagal: Aplikasi sedang dalam Mode Demo. Data hanya tersimpan di database lokal perangkat.',
+        errorMessage: !hasAuthSession && SupabaseConfig.isConfigured
+            ? 'Sinkronisasi dijeda: Akun belum terautentikasi di Supabase. Silakan login terlebih dahulu.'
+            : 'Sinkronisasi dijeda: Mode Demo aktif. Data transaksi hanya tersimpan di database lokal.',
         isOnline: false,
         unsyncedCount: count,
       );
@@ -184,5 +189,6 @@ class SyncEngine extends StateNotifier<SyncEngineState> {
 /// Provider Riverpod untuk SyncEngine
 final syncEngineProvider = StateNotifierProvider<SyncEngine, SyncEngineState>((ref) {
   final db = ref.watch(appDatabaseProvider);
-  return SyncEngine(db);
+  final client = ref.watch(supabaseClientProvider);
+  return SyncEngine(db, client);
 });

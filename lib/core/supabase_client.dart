@@ -1,6 +1,10 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'tenant_config_service.dart';
+
+/// Trigger provider untuk menyegarkan SupabaseClient di seluruh aplikasi
+final supabaseClientRefreshTriggerProvider = StateProvider<int>((ref) => 0);
 
 /// Supabase environment configuration and client initialization.
 /// Kredensial dibaca dari environment variables (--dart-define) atau TenantConfigService.
@@ -19,6 +23,7 @@ class SupabaseConfig {
   static bool get isConfigured {
     if (url.isNotEmpty && anonKey.isNotEmpty) return true;
     try {
+      if (!Supabase.instance.isInitialized) return false;
       final client = Supabase.instance.client;
       return client.rest.url.toString().isNotEmpty;
     } catch (_) {
@@ -26,20 +31,23 @@ class SupabaseConfig {
     }
   }
 
-  /// Inisialisasi Supabase saat app bootstrap (di main.dart)
-  /// Membaca konfigurasi tenant aktif dari TenantConfigService
-  static Future<void> initialize() async {
+  /// Inisialisasi Supabase saat app bootstrap (di main.dart) atau saat tenant diperbarui.
+  /// Membaca konfigurasi tenant aktif dari TenantConfigService.
+  static Future<bool> initialize() async {
     final tenantConfig = await TenantConfigService.loadConfig();
     final targetUrl = tenantConfig.isValid ? tenantConfig.supabaseUrl : url;
     final targetAnonKey = tenantConfig.isValid ? tenantConfig.supabaseAnonKey : anonKey;
 
     if (targetUrl.isEmpty || targetAnonKey.isEmpty) {
-      // ignore: avoid_print
-      print(
-        'PERINGATAN: Supabase URL atau Anon Key belum disetel.',
-      );
-      return;
+      debugPrint('PERINGATAN: Supabase URL atau Anon Key belum disetel.');
+      return false;
     }
+
+    try {
+      if (Supabase.instance.isInitialized) {
+        await Supabase.instance.dispose();
+      }
+    } catch (_) {}
 
     try {
       // ignore: deprecated_member_use
@@ -48,17 +56,22 @@ class SupabaseConfig {
         // ignore: deprecated_member_use
         anonKey: targetAnonKey,
       );
+      return true;
     } catch (e) {
-      // ignore: avoid_print
-      print('Gagal inisialisasi Supabase: $e');
+      debugPrint('Gagal inisialisasi Supabase: $e');
+      return false;
     }
   }
 }
 
 /// Riverpod provider untuk SupabaseClient instance (aman jika belum diinisialisasi)
 final supabaseClientProvider = Provider<SupabaseClient?>((ref) {
+  ref.watch(supabaseClientRefreshTriggerProvider);
   try {
-    return Supabase.instance.client;
+    if (Supabase.instance.isInitialized) {
+      return Supabase.instance.client;
+    }
+    return null;
   } catch (_) {
     return null;
   }

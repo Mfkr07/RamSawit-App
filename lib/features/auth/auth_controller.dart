@@ -215,6 +215,37 @@ class AuthController extends StateNotifier<AppAuthState> {
     }
   }
 
+  /// Mendaftarkan akun baru di Supabase Auth
+  Future<bool> signUp({
+    required String email,
+    required String password,
+    required String nama,
+    String role = 'admin',
+  }) async {
+    state = state.copyWith(isLoading: true, clearError: true);
+    try {
+      final profile = await _repository.signUp(
+        email: email,
+        password: password,
+        nama: nama,
+        role: role,
+      );
+      state = state.copyWith(
+        profile: profile,
+        isLoading: false,
+        clearError: true,
+      );
+      _startSessionAgeTimer();
+      return true;
+    } catch (e) {
+      state = state.copyWith(
+        isLoading: false,
+        errorMessage: e.toString().replaceAll('Exception: ', '').replaceAll('AuthException: ', ''),
+      );
+      return false;
+    }
+  }
+
   /// Keluar dari sesi aplikasi secara manual oleh pengguna
   Future<void> signOut() async {
     _stopSessionAgeTimer();

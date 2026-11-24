@@ -99,6 +99,52 @@ class AuthRepository {
     }
   }
 
+  /// Mendaftarkan akun baru di Supabase Auth (hanya berlaku pada mode Cloud)
+  Future<Profile> signUp({
+    required String email,
+    required String password,
+    required String nama,
+    String role = 'admin',
+  }) async {
+    final cleanEmail = email.trim().toLowerCase();
+
+    if (isDemoMode) {
+      throw const AuthException('Pendaftaran akun hanya dapat dilakukan saat terhubung ke database Supabase Cloud.');
+    }
+
+    try {
+      final response = await _client!.auth.signUp(
+        email: cleanEmail,
+        password: password,
+        data: {
+          'nama': nama.trim(),
+          'role': role,
+        },
+      );
+
+      final user = response.user;
+      if (user == null) {
+        throw const AuthException('Gagal membuat akun di Supabase.');
+      }
+
+      // Pastikan row profiles terisi jika trigger database belum ada
+      try {
+        await _client.from('profiles').upsert({
+          'id': user.id,
+          'nama': nama.trim(),
+          'role': role,
+        });
+      } catch (_) {}
+
+      await _sessionService.saveLoginTimestamp(DateTime.now());
+      return await getProfile(user.id);
+    } on AuthException catch (e) {
+      throw _translateAuthError(e);
+    } catch (e) {
+      throw AuthException('Gagal mendaftar: ${e.toString()}');
+    }
+  }
+
   /// Mendapatkan profil user dari tabel `public.profiles`
   Future<Profile> getProfile(String userId) async {
     if (isDemoMode) {

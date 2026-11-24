@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:http/http.dart' as http;
 import '../../core/supabase_client.dart';
+import '../../core/sync/sync_engine.dart';
 import '../../core/tenant_config_service.dart';
 import '../../core/theme/app_theme.dart';
+import '../auth/auth_controller.dart';
+import '../auth/auth_repository.dart';
 
 /// Notifier untuk mengelola state konfigurasi tenant / organisasi.
 class TenantConfigNotifier extends StateNotifier<AsyncValue<TenantConfig>> {
@@ -72,6 +76,9 @@ class _SetupOrganisasiPageState extends ConsumerState<SetupOrganisasiPage> {
   final _keyController = TextEditingController();
   bool _obscureKey = true;
   bool _isSaving = false;
+  bool _isTesting = false;
+  String? _testResultText;
+  bool? _testResultSuccess;
 
   @override
   void dispose() {
@@ -89,6 +96,73 @@ class _SetupOrganisasiPageState extends ConsumerState<SetupOrganisasiPage> {
     }
   }
 
+  Future<void> _testConnection() async {
+    final url = _urlController.text.trim();
+    final key = _keyController.text.trim();
+
+    if (url.isEmpty || key.isEmpty) {
+      setState(() {
+        _testResultSuccess = false;
+        _testResultText = 'Supabase Project URL dan Anon Key tidak boleh kosong.';
+      });
+      return;
+    }
+
+    setState(() {
+      _isTesting = true;
+      _testResultText = null;
+      _testResultSuccess = null;
+    });
+
+    final stopwatch = Stopwatch()..start();
+    try {
+      final cleanUrl = url.endsWith('/') ? url.substring(0, url.length - 1) : url;
+      // Gunakan /auth/v1/settings atau /auth/v1/health yang dapat diakses oleh anon key untuk validasi kredensial
+      var endpoint = Uri.parse('$cleanUrl/auth/v1/settings');
+
+      var response = await http.get(
+        endpoint,
+        headers: {
+          'apikey': key,
+          'Authorization': 'Bearer $key',
+        },
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode != 200) {
+        endpoint = Uri.parse('$cleanUrl/auth/v1/health');
+        response = await http.get(
+          endpoint,
+          headers: {
+            'apikey': key,
+            'Authorization': 'Bearer $key',
+          },
+        ).timeout(const Duration(seconds: 10));
+      }
+
+      stopwatch.stop();
+
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        setState(() {
+          _testResultSuccess = true;
+          _testResultText = 'Koneksi ke Supabase berhasil! (${stopwatch.elapsedMilliseconds} ms)\nDatabase Cloud siap digunakan.';
+        });
+      } else {
+        setState(() {
+          _testResultSuccess = false;
+          _testResultText = 'Gagal terhubung (HTTP ${response.statusCode}): Pastikan Anon Key sesuai dengan project Supabase Anda.';
+        });
+      }
+    } catch (e) {
+      stopwatch.stop();
+      setState(() {
+        _testResultSuccess = false;
+        _testResultText = 'Koneksi gagal: Tidak dapat menjangkau server Supabase ($e).';
+      });
+    } finally {
+      if (mounted) setState(() => _isTesting = false);
+    }
+  }
+
   Future<void> _handleSave() async {
     if (!_formKey.currentState!.validate()) return;
 
@@ -100,19 +174,37 @@ class _SetupOrganisasiPageState extends ConsumerState<SetupOrganisasiPage> {
             supabaseAnonKey: _keyController.text,
           );
 
-      // Re-initialize Supabase client immediately so user does not need to restart app
-      await SupabaseConfig.initialize();
+      // Re-initialize Supabase client immediately
+      final initialized = await SupabaseConfig.initialize();
+
+      // Refresh seluruh provider Riverpod terkait database dan autentikasi
+      ref.read(supabaseClientRefreshTriggerProvider.notifier).state++;
+      ref.invalidate(authRepositoryProvider);
+      ref.invalidate(authControllerProvider);
+      ref.invalidate(syncEngineProvider);
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Konfigurasi organisasi berhasil disimpan dan dihubungkan.',
+        if (initialized) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Konfigurasi organisasi berhasil disimpan dan terhubung ke Supabase Cloud.',
+              ),
+              backgroundColor: AppColors.success,
+              behavior: SnackBarBehavior.floating,
             ),
-            backgroundColor: AppColors.success,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Konfigurasi tersimpan, namun gagal inisialisasi Supabase. Periksa kembali URL dan Anon Key.',
+              ),
+              backgroundColor: AppColors.error,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
         Navigator.of(context).pop();
       }
     } catch (e) {
@@ -155,11 +247,22 @@ class _SetupOrganisasiPageState extends ConsumerState<SetupOrganisasiPage> {
     if (confirm == true && mounted) {
       setState(() => _isSaving = true);
       await ref.read(tenantConfigProvider.notifier).reset();
+      await SupabaseConfig.initialize();
+
+      ref.read(supabaseClientRefreshTriggerProvider.notifier).state++;
+      ref.invalidate(authRepositoryProvider);
+      ref.invalidate(authControllerProvider);
+      ref.invalidate(syncEngineProvider);
+
       final fresh = await TenantConfigService.loadConfig();
       _namaController.text = fresh.namaOrganisasi;
       _urlController.text = fresh.supabaseUrl;
       _keyController.text = fresh.supabaseAnonKey;
-      setState(() => _isSaving = false);
+      setState(() {
+        _isSaving = false;
+        _testResultText = null;
+        _testResultSuccess = null;
+      });
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -333,7 +436,69 @@ class _SetupOrganisasiPageState extends ConsumerState<SetupOrganisasiPage> {
                               ? 'Anon Key wajib diisi'
                               : null,
                         ),
-                        const SizedBox(height: 24),
+                        const SizedBox(height: 14),
+
+                        // Tombol Uji Koneksi
+                        OutlinedButton.icon(
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: AppColors.primary,
+                            side: const BorderSide(color: AppColors.hairline),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                          ),
+                          onPressed: _isTesting ? null : _testConnection,
+                          icon: _isTesting
+                              ? const SizedBox(
+                                  width: 14,
+                                  height: 14,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : const Icon(Icons.network_check, size: 16),
+                          label: Text(_isTesting ? 'Menguji Koneksi Supabase...' : 'Uji Koneksi Supabase'),
+                        ),
+
+                        if (_testResultText != null) ...[
+                          const SizedBox(height: 10),
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: _testResultSuccess == true
+                                  ? AppColors.success.withValues(alpha: 0.1)
+                                  : AppColors.error.withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(
+                                color: _testResultSuccess == true
+                                    ? AppColors.success.withValues(alpha: 0.4)
+                                    : AppColors.error.withValues(alpha: 0.4),
+                              ),
+                            ),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Icon(
+                                  _testResultSuccess == true ? Icons.check_circle : Icons.error_outline,
+                                  size: 18,
+                                  color: _testResultSuccess == true ? AppColors.success : AppColors.error,
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(
+                                    _testResultText!,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: _testResultSuccess == true ? AppColors.success : AppColors.error,
+                                      fontWeight: FontWeight.w500,
+                                      height: 1.3,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 20),
                         ElevatedButton.icon(
                           style: ElevatedButton.styleFrom(
                             backgroundColor: AppColors.primary,

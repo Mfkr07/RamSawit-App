@@ -4,6 +4,7 @@ import 'package:transaksi_sawit_app/core/theme/app_theme.dart';
 import 'package:transaksi_sawit_app/core/sync/sync_engine.dart';
 import 'package:transaksi_sawit_app/core/supabase_client.dart';
 import 'package:transaksi_sawit_app/features/auth/auth_controller.dart';
+import 'package:transaksi_sawit_app/features/auth/auth_repository.dart';
 
 /// Widget bilah status sinkronisasi & jaringan offline-first
 class SyncStatusBar extends ConsumerWidget {
@@ -13,8 +14,13 @@ class SyncStatusBar extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final syncState = ref.watch(syncEngineProvider);
     final authState = ref.watch(authControllerProvider);
-    final isDemoMode = !SupabaseConfig.isConfigured;
-    final isDemoSession = isDemoMode && authState.profile != null;
+    final authRepo = ref.watch(authRepositoryProvider);
+
+    final isDemoMode = authRepo.isDemoMode || !SupabaseConfig.isConfigured;
+    final isDemoSession = authState.profile != null &&
+        (isDemoMode ||
+            authState.profile!.id == 'demo-user-id-12345' ||
+            authRepo.currentAuthUser == null);
 
     // Konfigurasi visual berdasarkan status
     Color bgColor;
@@ -100,7 +106,7 @@ class SyncStatusBar extends ConsumerWidget {
           InkWell(
             onTap: () {
               ref.read(syncEngineProvider.notifier).syncNow();
-              if (isDemoMode) {
+              if (isDemoSession) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
                     content: Row(
@@ -109,7 +115,7 @@ class SyncStatusBar extends ConsumerWidget {
                         SizedBox(width: 10),
                         Expanded(
                           child: Text(
-                            'Sinkronisasi gagal: Aplikasi sedang dalam Mode Demo. Data hanya disimpan di database lokal perangkat.',
+                            'Sinkronisasi tidak aktif: Anda sedang berada dalam Mode Demo. Data hanya disimpan di database lokal perangkat.',
                             style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
                           ),
                         ),
