@@ -4,15 +4,235 @@ import 'package:decimal/decimal.dart';
 import 'package:http/http.dart' as http;
 import '../../../core/services/ai_endpoint_config_service.dart';
 import '../../../models/ai_insight.dart';
+import '../../../models/jenis_buah.dart';
 import '../../../models/pabrik.dart';
 import '../../../models/pengeluaran.dart';
 import '../../../models/pengiriman_pabrik.dart';
+import '../../../models/penjual.dart';
+import '../../../models/saldo_ringkasan.dart';
 import '../../../models/transaksi.dart';
 import 'ai_business_query_service.dart';
 
+/// Callback eksekutor tool ke database lokal / Supabase untuk Agentic Tool Calling
+typedef AiToolExecutor = Future<String> Function(String toolName, Map<String, dynamic> arguments);
+
 /// Service Agentic AI untuk memanggil LLM (OpenAI-compatible, 9router, Ollama)
-/// dengan kapabilitas Read-Only Data, Context Reasoning, dan Pure Text Output.
+/// dengan kapabilitas Read-Only Data, Context Reasoning, Agentic Tool Calling, dan Pure Text Output.
 class AiAgenticService {
+  /// Skema definisi Agentic Tools (OpenAI-compatible function definitions)
+  static final List<Map<String, dynamic>> _databaseTools = [
+    {
+      'type': 'function',
+      'function': {
+        'name': 'query_transaksi_pembelian',
+        'description':
+            'Mencari data transaksi pembelian TBS petani dari database secara langsung berdasarkan nama petani, nomor nota (misal: TRX-20261015-0003), rentang tanggal (YYYY-MM-DD), status (selesai/dibatalkan), atau limit baris.',
+        'parameters': {
+          'type': 'object',
+          'properties': {
+            'nama_petani': {
+              'type': 'string',
+              'description': 'Nama petani atau kata kunci nama pemasok buah TBS',
+            },
+            'kode_transaksi': {
+              'type': 'string',
+              'description': 'Nomor nota transaksi timbangan pembelian',
+            },
+            'tanggal_mulai': {
+              'type': 'string',
+              'description': 'Format tanggal awal YYYY-MM-DD (contoh: 2026-10-01)',
+            },
+            'tanggal_akhir': {
+              'type': 'string',
+              'description': 'Format tanggal akhir YYYY-MM-DD (contoh: 2026-10-31)',
+            },
+            'status': {
+              'type': 'string',
+              'description': 'Status nota: selesai atau dibatalkan',
+            },
+            'limit': {
+              'type': 'integer',
+              'description': 'Jumlah maksimal baris data (default 20)',
+            },
+          },
+        },
+      },
+    },
+    {
+      'type': 'function',
+      'function': {
+        'name': 'query_pengiriman_pabrik',
+        'description':
+            'Mencari data pengiriman dan penjualan buah ke pabrik PKS dari database berdasarkan nama pabrik rekanan, kode DO/SPK, rentang tanggal (YYYY-MM-DD), status, atau limit baris.',
+        'parameters': {
+          'type': 'object',
+          'properties': {
+            'nama_pabrik': {
+              'type': 'string',
+              'description': 'Nama pabrik rekanan PKS',
+            },
+            'kode_pengiriman': {
+              'type': 'string',
+              'description': 'Nomor DO/SPK pengiriman pabrik',
+            },
+            'tanggal_mulai': {
+              'type': 'string',
+              'description': 'Format tanggal awal YYYY-MM-DD',
+            },
+            'tanggal_akhir': {
+              'type': 'string',
+              'description': 'Format tanggal akhir YYYY-MM-DD',
+            },
+            'limit': {
+              'type': 'integer',
+              'description': 'Jumlah maksimal baris data (default 20)',
+            },
+          },
+        },
+      },
+    },
+    {
+      'type': 'function',
+      'function': {
+        'name': 'get_rekap_finansial_periode',
+        'description':
+            'Mengambil rekapitulasi finansial agregasi resmi database (Omzet penjualan PKS, HPP pembelian petani, margin kotor, beban operasional, dan estimasi laba bersih) untuk rentang tanggal tertentu (YYYY-MM-DD).',
+        'parameters': {
+          'type': 'object',
+          'properties': {
+            'tanggal_mulai': {
+              'type': 'string',
+              'description': 'Format tanggal mulai YYYY-MM-DD (wajib)',
+            },
+            'tanggal_akhir': {
+              'type': 'string',
+              'description': 'Format tanggal akhir YYYY-MM-DD (wajib)',
+            },
+            'label_periode': {
+              'type': 'string',
+              'description': 'Label nama periode (contoh: 1-15 Oktober 2026)',
+            },
+          },
+          'required': ['tanggal_mulai', 'tanggal_akhir'],
+        },
+      },
+    },
+    {
+      'type': 'function',
+      'function': {
+        'name': 'query_pengeluaran_operasional',
+        'description':
+            'Mencari catatan beban biaya operasional ram dari database berdasarkan kategori/jenis biaya, keterangan, atau rentang tanggal (YYYY-MM-DD).',
+        'parameters': {
+          'type': 'object',
+          'properties': {
+            'kategori': {
+              'type': 'string',
+              'description': 'Nama jenis kategori pengeluaran atau kata kunci',
+            },
+            'tanggal_mulai': {
+              'type': 'string',
+              'description': 'Format YYYY-MM-DD',
+            },
+            'tanggal_akhir': {
+              'type': 'string',
+              'description': 'Format YYYY-MM-DD',
+            },
+            'limit': {
+              'type': 'integer',
+              'description': 'Jumlah maksimal baris (default 20)',
+            },
+          },
+        },
+      },
+    },
+    {
+      'type': 'function',
+      'function': {
+        'name': 'get_status_saldo_kas',
+        'description':
+            'Mengambil status saldo modal kas operasional saat ini, modal awal disetor, dan total modal terpakai belanja TBS.',
+        'parameters': {
+          'type': 'object',
+          'properties': {},
+        },
+      },
+    },
+    {
+      'type': 'function',
+      'function': {
+        'name': 'cari_petani_penjual',
+        'description':
+            'Mencari daftar profil petani/pemasok sawit dari tabel penjual berdasarkan nama atau kata kunci.',
+        'parameters': {
+          'type': 'object',
+          'properties': {
+            'nama': {
+              'type': 'string',
+              'description': 'Nama petani yang dicari',
+            },
+          },
+        },
+      },
+    },
+  ];
+
+  /// Membersihkan teks dari notasi LaTeX / KaTeX / MathJax ke teks polos yang rapi dan mudah dibaca
+  static String sanitizeAiText(String text) {
+    var result = text;
+
+    // 1. Konversi operator matematika
+    result = result.replaceAll(RegExp(r'\\approx'), '≈');
+    result = result.replaceAll(RegExp(r'\\times'), '×');
+    result = result.replaceAll(RegExp(r'\\cdot'), '·');
+    result = result.replaceAll(RegExp(r'\\le(q)?\b'), '≤');
+    result = result.replaceAll(RegExp(r'\\ge(q)?\b'), '≥');
+    result = result.replaceAll(RegExp(r'\\pm\b'), '±');
+    result = result.replaceAll(RegExp(r'\\div\b'), '÷');
+    result = result.replaceAll(RegExp(r'\\sum\b'), 'Σ');
+    result = result.replaceAll(RegExp(r'\\quad'), ' ');
+    result = result.replaceAll(RegExp(r'\\qquad'), '  ');
+
+    // 2. Konversi pecahan \frac{a}{b} menjadi (a / b)
+    result = result.replaceAllMapped(
+      RegExp(r'\\frac\{([^}]+)\}\{([^}]+)\}'),
+      (match) => '(${match.group(1)} / ${match.group(2)})',
+    );
+
+    // 3. Konversi \text{...} dan \mathrm{...} ke teks polos
+    result = result.replaceAllMapped(
+      RegExp(r'\\(text|mathrm)\{([^}]+)\}'),
+      (m) => m.group(2) ?? '',
+    );
+
+    // 4. Konversi \mathbf{...} dan \textbf{...} ke bold markdown **...**
+    result = result.replaceAllMapped(
+      RegExp(r'\\(mathbf|textbf)\{([^}]+)\}'),
+      (m) => '**${m.group(2)}**',
+    );
+
+    // 5. Hapus pembungkus display math $$...$$
+    result = result.replaceAllMapped(
+      RegExp(r'\$\$([^\$]+)\$\$'),
+      (match) => match.group(1)?.trim() ?? '',
+    );
+
+    // 6. Hapus pembungkus inline math $...$
+    result = result.replaceAllMapped(
+      RegExp(r'\$([^\$\n]+)\$'),
+      (match) => match.group(1)?.trim() ?? '',
+    );
+
+    // 7. Bersihkan backslash escape yang tertinggal
+    result = result.replaceAll(r'\_', '_');
+    result = result.replaceAll(r'\%', '%');
+
+    // 8. Rapikan spasi ganda hasil konversi \text
+    result = result.replaceAll(RegExp(r' {2,}'), ' ');
+
+    return result;
+  }
+
   /// Memanggil LLM dengan System Prompt cerdas berisi data operasional riil TBS sawit & memori percakapan
   static Future<AiQueryResponse> processWithAgenticLlm({
     required String query,
@@ -20,8 +240,12 @@ class AiAgenticService {
     required List<PengirimanPabrik> pengirimanList,
     required List<Pengeluaran> pengeluaranList,
     required List<Pabrik> pabrikList,
+    List<Penjual>? penjualList,
+    List<JenisBuah>? jenisBuahList,
+    SaldoRingkasan? saldoRingkasan,
     List<AiChatMessage>? chatHistory,
     String? dashboardFinancialContext,
+    AiToolExecutor? toolExecutor,
   }) async {
     final config = await AiEndpointConfigService.loadConfig();
 
@@ -43,30 +267,53 @@ class AiAgenticService {
         pengirimanList: pengirimanList,
         pengeluaranList: pengeluaranList,
         pabrikList: pabrikList,
+        penjualList: penjualList,
+        jenisBuahList: jenisBuahList,
+        saldoRingkasan: saldoRingkasan,
         dashboardFinancialContext: dashboardFinancialContext,
       );
 
       final systemPrompt = '''
 Anda adalah Asisten Agentic AI Bisnis untuk Sistem Manajemen Operasional Ram Timbangan Kelapa Sawit (TBS) bernama RamSawit AI.
-Peran Anda: Membaca data operasional riil, melakukan reasoning dan analisis bisnis yang tajam, serta memberikan output teks yang ramah, profesional, dan solutif bagi Pemilik Bisnis (Owner) atau Kasir Timbangan.
+Peran Anda: Membaca seluruh data operasional riil dari semua tabel database, melakukan reasoning dan analisis bisnis yang tajam, serta memberikan output teks yang ramah, profesional, dan solutif bagi Pemilik Bisnis (Owner) atau Kasir Timbangan.
 
-DATA OPERASIONAL SAAT INI (READ-ONLY CONTEXT):
+DATA OPERASIONAL LENGKAP DARI SELURUH TABEL DATABASE (READ-ONLY CONTEXT):
 $operationalContext
 
-PANDUAN INTERAKSI & REASONING:
-1. AKURASI ANGKA & DATA OPERASIONAL:
-   - Anda memiliki akses penuh ke ringkasan finansial resmi dan rincian transaksi di atas, termasuk Omzet Penjualan ke Pabrik PKS, Pembelian TBS dari Petani (HPP TBS), Biaya Operasional, Margin Kotor, dan Laba Bersih.
-   - Jangan pernah menyatakan bahwa harga jual pabrik atau omzet tidak tercatat, karena rincian DO/SPK di atas sudah memuat harga jual per kg dan total nilai rupiah penjualan ke pabrik secara detail.
-   - Jika ditanya mengenai pendapatan, laba kotor, atau laba bersih (misal 1 bulan ini atau rentang waktu tertentu), rujuk langsung data agregasi pada RINGKASAN FINANSIAL RESMI dan rincikan perhitungannya secara transparan.
-2. JELASKAN SUMBER DATA:
-   - Jika ditanya mengenai sumber data, jelaskan bahwa data bersumber langsung dari catatan nota timbangan pembelian petani, slip penerimaan dan klaim pembayaran pabrik PKS (termasuk audit potongan sortasi & susut), serta catatan pengeluaran operasional di sistem RamSawit.
-3. KONSULTASI RAMAH:
+PANDUAN INTERAKSI & REASONING (WAJIB DIPATUHI):
+1. KEMAMPUAN MEMBACA SELURUH TABEL DATABASE & DATA MULTI-PERIODE:
+   - Anda memiliki akses penuh dan langsung ke SELURUH DATA DARI SEMUA TABEL DATABASE RamSawit yang diinjeksi di atas:
+     • Tabel Transaksi & Transaksi Item (Pembelian TBS Petani, tonase kotor/bersih, potongan sortasi, harga beli, subtotal)
+     • Tabel Pengiriman Pabrik & Pabrik (DO/SPK penjualan ke PKS, tonase kirim vs diterima, susut, potongan sortasi pabrik, harga jual per kg, total omzet)
+     • Tabel Master Penjual / Petani (Daftar petani penyuplai buah)
+     • Tabel Master Jenis Buah (Tandan Besar, Tandan Kecil, Berondolan dan porsi persentasenya)
+     • Tabel Pengeluaran & Jenis Pengeluaran (Beban operasional timbangan, armada, gaji, dll.)
+     • Tabel Saldo Modal & Arus Kas (Modal disetor, pemakaian belanja TBS, dan sisa saldo kas)
+     • Rekapitulasi Multi-Bulan & Komparasi Periodik (Data November berjalan, komparasi setara 1 s/d hari ini di bulan Oktober, data Oktober penuh, September, dan historis 3 bulan).
+   - JANGAN PERNAH menyatakan bahwa data sistem terbatas, data harga tidak tercatat, atau data historis Oktober/September tidak terurai, karena SELURUH RINCIAN MULTI-BULAN DAN PERBANDINGAN PERIODE SUDAH TERSEDIA SECARA LENGKAP PADA KONTEKS DI ATAS.
+   - Jika pengguna meminta perbandingan periode tertentu (contoh: "1-24 Oktober dibandingkan 1-24 November"), bandingkan data dari bagian 'B. BULAN LALU — PERIODE SETARA' dengan 'A. BULAN BERJALAN' secara presisi angka per angka (Omzet, HPP Beli TBS, Tonase, Margin, Beban Ops, dan Laba Bersih) beserta persentase kenaikan/penurunannya.
+
+2. ATURAN FORMAT PENULISAN (SANGAT PENTING - ANTI-LATEX):
+   - DILARANG KERAS menggunakan notasi LaTeX / MathJax / KaTeX (seperti '\$', '\$\$', '\\text{...}', '\\mathbf{...}', '\\approx', '\\times', '\\frac{...}{...}', dll.).
+   - Seluruh teks, angka mata uang Rupiah, berat kg, persentase, dan rumus hitungan WAJIB ditulis dalam format TEKS BIASA (Plain Text) yang rapi.
+   - Format nominal uang: "Rp 1.500.000" (gunakan titik sebagai pemisah ribuan).
+   - Format perhitungan: "Rp 2.000.000 - Rp 500.000 = Rp 1.500.000" atau "Rp 1.000.000 / 30 hari ≈ Rp 33.333 / hari".
+   - Format perkalian: gunakan tanda silang biasa "×" atau "x", bukan "\\times".
+   - Format perkiraan: gunakan tanda "≈" atau "~", bukan "\\approx".
+
+3. KEMAMPUAN AGENTIC DATABASE TOOLS (FUNCTION CALLING):
+   - Anda dibekali fungsi/tools untuk membaca database secara langsung:
+     • query_transaksi_pembelian: untuk mencari nota atau setoran petani tertentu (bisa filter nama, nomor nota, rentang tanggal).
+     • query_pengiriman_pabrik: untuk mencari DO/SPK penjualan ke PKS rekanan.
+     • get_rekap_finansial_periode: untuk mengambil rekap omzet, HPP, margin, biaya ops, dan laba bersih rentang tanggal tertentu.
+     • query_pengeluaran_operasional: untuk mencari beban operasional tertentu.
+     • get_status_saldo_kas: untuk melihat kondisi kas modal terkini.
+     • cari_petani_penjual: untuk mencari data profil petani.
+   - Jika pengguna menanyakan data spesifik (misal nama petani, nota tertentu, tanggal tertentu yang butuh rincian), GUNAKAN tool yang sesuai untuk membaca database riil sebelum memberikan jawaban!
+
+4. KONSULTASI RAMAH & PROFESIONAL:
    - Jika pengguna menyapa (halo, hai, selamat pagi, siapa kamu), jawab secara ramah, perkenalkan diri Anda sebagai Asisten AI RamSawit, dan tawarkan bantuan analitik berdasarkan status operasional terkini.
-4. ANALISIS MENDALAM:
-   - Berikan analisis tren, margin keuntungan, efisiensi sortasi pabrik, atau anomali jika relevan dengan pertanyaan.
-5. FORMAT & GAYA BAHASA:
-   - Gunakan Bahasa Indonesia yang lugas, profesional, dan mudah dipahami.
-   - Format teks menggunakan poin-poin tebal (**teks**) dan format nominal Rupiah (**Rp ...**) / Kg (**... kg**) yang rapi.
+   - Gunakan Bahasa Indonesia yang lugas, komunikatif, dan mudah dipahami oleh pemilik usaha sawit.
 ''';
 
       final cleanBaseUrl = config.baseUrl.endsWith('/')
@@ -81,7 +328,7 @@ PANDUAN INTERAKSI & REASONING:
       };
 
       // Siapkan payload percakapan multi-turn
-      final messagesPayload = <Map<String, String>>[
+      final messagesPayload = <Map<String, dynamic>>[
         {'role': 'system', 'content': systemPrompt},
       ];
 
@@ -100,28 +347,110 @@ PANDUAN INTERAKSI & REASONING:
 
       messagesPayload.add({'role': 'user', 'content': query});
 
-      final body = jsonEncode({
-        'model': config.modelName.trim().isNotEmpty
-            ? config.modelName.trim()
-            : 'ag/gemini-3.8-flash-medium',
-        'messages': messagesPayload,
-        'temperature': 0.3,
-        'stream': false,
-      });
+      final modelName = config.modelName.trim().isNotEmpty
+          ? config.modelName.trim()
+          : 'ag/gemini-3.8-flash-medium';
 
-      final response = await http
-          .post(Uri.parse(endpoint), headers: headers, body: body)
+      final requestBodyMap = <String, dynamic>{
+        'model': modelName,
+        'messages': messagesPayload,
+        'temperature': 0.2,
+        'stream': false,
+      };
+
+      if (toolExecutor != null) {
+        requestBodyMap['tools'] = _databaseTools;
+        requestBodyMap['tool_choice'] = 'auto';
+      }
+
+      var response = await http
+          .post(Uri.parse(endpoint), headers: headers, body: jsonEncode(requestBodyMap))
           .timeout(const Duration(seconds: 25));
+
+      // Jika endpoint mengembalikan HTTP 400 (misal model/proxy tidak support tools parameter), retry tanpa tools
+      if (response.statusCode == 400 && requestBodyMap.containsKey('tools')) {
+        requestBodyMap.remove('tools');
+        requestBodyMap.remove('tool_choice');
+        response = await http
+            .post(Uri.parse(endpoint), headers: headers, body: jsonEncode(requestBodyMap))
+            .timeout(const Duration(seconds: 25));
+      }
 
       if (response.statusCode == 200) {
         final Map<String, dynamic> data = jsonDecode(response.body);
         final choices = data['choices'] as List<dynamic>?;
         if (choices != null && choices.isNotEmpty) {
-          final message = choices[0]['message'] as Map<String, dynamic>?;
-          final content = message?['content'] as String? ?? '';
+          final choiceMsg = choices[0]['message'] as Map<String, dynamic>?;
+          final toolCalls = choiceMsg?['tool_calls'] as List<dynamic>?;
+
+          // JIKA LLM MEMANGGIL ALAT DATABASE (AGENTIC TOOL CALLING):
+          if (toolCalls != null && toolCalls.isNotEmpty && toolExecutor != null) {
+            messagesPayload.add({
+              'role': 'assistant',
+              'content': choiceMsg?['content'] ?? '',
+              'tool_calls': toolCalls,
+            });
+
+            for (final tc in toolCalls) {
+              final toolCallId = tc['id'] as String? ?? 'call_${DateTime.now().millisecondsSinceEpoch}';
+              final fn = tc['function'] as Map<String, dynamic>? ?? {};
+              final toolName = fn['name'] as String? ?? '';
+              final argsRaw = fn['arguments'];
+              Map<String, dynamic> args = {};
+              if (argsRaw is String && argsRaw.trim().isNotEmpty) {
+                try {
+                  args = jsonDecode(argsRaw) as Map<String, dynamic>;
+                } catch (_) {}
+              } else if (argsRaw is Map<String, dynamic>) {
+                args = argsRaw;
+              }
+
+              final toolResultJson = await toolExecutor(toolName, args);
+
+              messagesPayload.add({
+                'role': 'tool',
+                'tool_call_id': toolCallId,
+                'content': toolResultJson,
+              });
+            }
+
+            final secondRequestBody = {
+              'model': modelName,
+              'messages': messagesPayload,
+              'temperature': 0.2,
+              'stream': false,
+            };
+
+            final secondResponse = await http
+                .post(Uri.parse(endpoint), headers: headers, body: jsonEncode(secondRequestBody))
+                .timeout(const Duration(seconds: 25));
+
+            if (secondResponse.statusCode == 200) {
+              final Map<String, dynamic> secondData = jsonDecode(secondResponse.body);
+              final secondChoices = secondData['choices'] as List<dynamic>?;
+              if (secondChoices != null && secondChoices.isNotEmpty) {
+                final finalMsg = secondChoices[0]['message'] as Map<String, dynamic>?;
+                final finalContent = finalMsg?['content'] as String? ?? '';
+                if (finalContent.trim().isNotEmpty) {
+                  return AiQueryResponse(
+                    text: sanitizeAiText(finalContent.trim()),
+                    suggestions: [
+                      'Berapa laba bersih periode ini?',
+                      'Pabrik mana yang potongan sortasinya paling rendah?',
+                      'Rekomendasi harga beli TBS ke petani hari ini?',
+                    ],
+                  );
+                }
+              }
+            }
+          }
+
+          // JIKA TIDAK ADA TOOL CALL (Langsung menghasilkan teks):
+          final content = choiceMsg?['content'] as String? ?? '';
           if (content.trim().isNotEmpty) {
+            final cleanedText = sanitizeAiText(content.trim());
             return AiQueryResponse(
-              text: content.trim(),
+              text: cleanedText,
               suggestions: [
                 'Berapa laba bersih periode ini?',
                 'Pabrik mana yang potongan sortasinya paling rendah?',
@@ -175,6 +504,9 @@ PANDUAN INTERAKSI & REASONING:
     required List<PengirimanPabrik> pengirimanList,
     required List<Pengeluaran> pengeluaranList,
     required List<Pabrik> pabrikList,
+    List<Penjual>? penjualList,
+    List<JenisBuah>? jenisBuahList,
+    SaldoRingkasan? saldoRingkasan,
     String? dashboardFinancialContext,
   }) {
     final sb = StringBuffer();
@@ -186,8 +518,34 @@ PANDUAN INTERAKSI & REASONING:
       sb.writeln('');
     }
 
-    // 1. Data Transaksi Pembelian TBS
-    sb.writeln('=== 1. DATA PEMBELIAN TBS DARI PETANI/PENJUAL ===');
+    // 1. Data Tabel Saldo Kas & Modal
+    if (saldoRingkasan != null) {
+      sb.writeln('=== TABEL SALDO MODAL & KAS OPERASIONAL (saldo_modal, mutasi_saldo) ===');
+      sb.writeln('Modal Awal / Total Top Up Masuk: Rp ${saldoRingkasan.totalTopup}');
+      sb.writeln('Total Pemakaian Belanja TBS Petani: Rp ${saldoRingkasan.totalPemakaian}');
+      sb.writeln('Sisa Saldo Kas Operasional Saat Ini: Rp ${saldoRingkasan.sisaSaldo}');
+      sb.writeln('');
+    }
+
+    // 2. Data Tabel Master Penjual / Petani
+    if (penjualList != null && penjualList.isNotEmpty) {
+      sb.writeln('=== TABEL MASTER PENJUAL / PETANI SAWIT (penjual) ===');
+      sb.writeln('Total Petani Terdaftar: ${penjualList.length} orang');
+      final namaPetani = penjualList.take(25).map((p) => '${p.nama} (${p.isActive ? "Aktif" : "Nonaktif"})').join(', ');
+      sb.writeln('Daftar Petani Pemasok: $namaPetani');
+      sb.writeln('');
+    }
+
+    // 3. Data Tabel Master Jenis Buah TBS
+    if (jenisBuahList != null && jenisBuahList.isNotEmpty) {
+      sb.writeln('=== TABEL MASTER JENIS BUAH KELAPA SAWIT (jenis_buah) ===');
+      final jbStr = jenisBuahList.map((j) => '${j.nama} (${j.kode})').join(', ');
+      sb.writeln('Jenis TBS Diterima: $jbStr');
+      sb.writeln('');
+    }
+
+    // 4. Data Transaksi Pembelian TBS
+    sb.writeln('=== TABEL TRANSAKSI PEMBELIAN TBS DARI PETANI (transaksi, transaksi_item) ===');
     sb.writeln('Total Transaksi di Database: ${transaksiList.length}');
     Decimal totalKgBeliSemua = Decimal.zero;
     Decimal totalRpBeliSemua = Decimal.zero;

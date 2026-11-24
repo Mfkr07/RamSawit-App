@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../models/ai_insight.dart';
 import '../ai_analytics_controller.dart';
+import '../services/ai_agentic_service.dart';
 import 'dialogs/ai_endpoint_settings_dialog.dart';
 
 /// Widget Panel Interaktif Asisten Konsultasi Bisnis AI (Carbon Design System)
@@ -315,7 +316,7 @@ class _AiChatAdvisorWidgetState extends ConsumerState<AiChatAdvisorWidget> {
                 const SizedBox(width: 8),
                 InkWell(
                   onTap: () {
-                    Clipboard.setData(ClipboardData(text: msg.text));
+                    Clipboard.setData(ClipboardData(text: AiAgenticService.sanitizeAiText(msg.text)));
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
                         content: Text('Teks jawaban AI disalin ke papan klip.'),
@@ -439,7 +440,8 @@ class _AiChatAdvisorWidgetState extends ConsumerState<AiChatAdvisorWidget> {
   }
 
   Widget _renderFormattedText(String text) {
-    final lines = text.split('\n');
+    final clean = AiAgenticService.sanitizeAiText(text);
+    final lines = clean.split('\n');
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: lines.map((line) {

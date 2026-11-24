@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:transaksi_sawit_app/features/ai_analytics/ai_analytics_controller.dart';
+import 'package:transaksi_sawit_app/features/ai_analytics/services/ai_agentic_service.dart';
 import 'package:transaksi_sawit_app/features/ai_analytics/widgets/ai_insight_card.dart';
 import 'package:transaksi_sawit_app/features/ai_analytics/widgets/ai_kpi_overview_card.dart';
 import 'package:transaksi_sawit_app/features/dashboard/widgets/ai_quick_insight_banner.dart';
@@ -78,6 +79,20 @@ void main() {
       final lastMsg = state.chatMessages.last;
       expect(lastMsg.sender, equals('ai'));
       expect(lastMsg.text.contains('Rekomendasi Harga Beli'), isTrue);
+    });
+
+    test('2.1. AiAgenticService.sanitizeAiText membersihkan notasi LaTeX mentah', () {
+      const rawLatex1 = r'$\text{Rp } 2.838.929.510,18 - \text{Rp } 867.118.933 = \mathbf{\text{Rp } 1.971.810.577,18}$';
+      final clean1 = AiAgenticService.sanitizeAiText(rawLatex1);
+      expect(clean1, equals('Rp 2.838.929.510,18 - Rp 867.118.933 = **Rp 1.971.810.577,18**'));
+
+      const rawLatex2 = r'$\text{Rp } 1.971.810.577,18 / 61 \text{ hari } \approx \mathbf{\text{Rp } 32.324.764 \text{ / hari}}$';
+      final clean2 = AiAgenticService.sanitizeAiText(rawLatex2);
+      expect(clean2, equals('Rp 1.971.810.577,18 / 61 hari ≈ **Rp 32.324.764 / hari**'));
+
+      const rawLatex3 = r'$24 \times \text{Rp } 32.324.764 \approx \mathbf{\text{Rp } 775.794.336}$';
+      final clean3 = AiAgenticService.sanitizeAiText(rawLatex3);
+      expect(clean3, equals('24 × Rp 32.324.764 ≈ **Rp 775.794.336**'));
     });
   });
 

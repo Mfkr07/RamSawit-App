@@ -1,15 +1,22 @@
+import 'dart:convert';
 import 'package:decimal/decimal.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../models/ai_insight.dart';
+import '../../models/jenis_buah.dart';
 import '../../models/pabrik.dart';
 import '../../models/pengeluaran.dart';
 import '../../models/pengiriman_pabrik.dart';
+import '../../models/penjual.dart';
+import '../../models/saldo_ringkasan.dart';
 import '../../models/transaksi.dart';
 import '../dashboard/dashboard_repository.dart';
 import '../pabrik/pabrik_repository.dart';
 import '../pengeluaran/pengeluaran_repository.dart';
 import '../pengiriman_pabrik/pengiriman_pabrik_repository.dart';
+import '../penjual/penjual_repository.dart';
+import '../saldo/saldo_repository.dart';
+import '../transaksi/jenis_buah_repository.dart';
 import '../transaksi/transaksi_repository.dart';
 import 'services/ai_agentic_service.dart';
 
@@ -417,16 +424,23 @@ class AiAnalyticsController extends StateNotifier<AiAnalyticsState> {
     );
 
     try {
-      // 1. Ambil data transaksi riil dari berbagai repository
+      // 1. Ambil data dari seluruh tabel database (transaksi, pengiriman, pengeluaran, pabrik, penjual, jenis buah, saldo)
       final trxRepo = _ref.read(transaksiRepositoryProvider);
       final pengirimanRepo = _ref.read(pengirimanPabrikRepositoryProvider);
       final pengeluaranRepo = _ref.read(pengeluaranRepositoryProvider);
       final pabrikRepo = _ref.read(pabrikRepositoryProvider);
+      final penjualRepo = _ref.read(penjualRepositoryProvider);
+      final jenisBuahRepo = _ref.read(jenisBuahRepositoryProvider);
+      final saldoRepo = _ref.read(saldoRepositoryProvider);
+      final dashboardRepo = _ref.read(dashboardRepositoryProvider);
 
       List<TransaksiRingkasan> allTrx = [];
       List<PengirimanPabrik> allKrm = [];
       List<Pengeluaran> allPengeluaran = [];
       List<Pabrik> allPabrik = [];
+      List<Penjual> allPenjual = [];
+      List<JenisBuah> allJenisBuah = [];
+      SaldoRingkasan? saldoSummary;
 
       try {
         final trxRes = await trxRepo.getFilteredRingkasanPaginated(page: 1, pageSize: 100);
@@ -434,12 +448,12 @@ class AiAnalyticsController extends StateNotifier<AiAnalyticsState> {
       } catch (_) {}
 
       try {
-        final krmRes = await pengirimanRepo.getPengirimanPaginated(page: 1, pageSize: 50);
+        final krmRes = await pengirimanRepo.getPengirimanPaginated(page: 1, pageSize: 60);
         allKrm = krmRes.items;
       } catch (_) {}
 
       try {
-        final expRes = await pengeluaranRepo.fetchPengeluaran(page: 1, pageSize: 50);
+        final expRes = await pengeluaranRepo.fetchPengeluaran(page: 1, pageSize: 60);
         allPengeluaran = expRes.items;
       } catch (_) {}
 
@@ -447,55 +461,386 @@ class AiAnalyticsController extends StateNotifier<AiAnalyticsState> {
         allPabrik = await pabrikRepo.getPabrikList();
       } catch (_) {}
 
-      // 2. Kumpulkan data agregasi finansial resmi dari DashboardRepository
+      try {
+        allPenjual = await penjualRepo.getPenjualList();
+      } catch (_) {}
+
+      try {
+        allJenisBuah = await jenisBuahRepo.getActiveJenisBuah();
+      } catch (_) {}
+
+      try {
+        saldoSummary = await saldoRepo.getSaldoRingkasan();
+      } catch (_) {}
+
+      // 2. Kumpulkan data agregasi multi-bulan & komparasi periodik dari DashboardRepository
       String dashboardContext = '';
       try {
-        final dashboardRepo = _ref.read(dashboardRepositoryProvider);
         final now = DateTime.now();
-        final startOfMonth = DateTime(now.year, now.month, 1);
-        final endOfDay = DateTime(now.year, now.month, now.day, 23, 59, 59);
+        final currentDay = now.day;
 
-        final summaryBulanIni = await dashboardRepo.getKartuBulanIniSummary(startOfMonth, endOfDay, 'Bulan Ini');
-        final labaList = await dashboardRepo.getLabaBersihHarian(startOfMonth, endOfDay);
+        // A. Bulan Berjalan (November)
+        final startOfMonth = DateTime(now.year, now.month, 1);
+        final endOfDay = DateTime(now.year, now.month, currentDay, 23, 59, 59);
+
+        final summaryBulanIni = await dashboardRepo.getKartuBulanIniSummary(startOfMonth, endOfDay, 'November ${now.year}');
+        final labaListBulanIni = await dashboardRepo.getLabaBersihHarian(startOfMonth, endOfDay);
         Decimal totalLabaBersihBulanIni = Decimal.zero;
         Decimal totalOpsBulanIni = Decimal.zero;
-        for (final l in labaList) {
+        for (final l in labaListBulanIni) {
           totalLabaBersihBulanIni += l.labaBersih;
           totalOpsBulanIni += l.totalPengeluaran;
         }
 
-        final start90d = now.subtract(const Duration(days: 90));
-        final summaryHistoris = await dashboardRepo.getKartuBulanIniSummary(start90d, endOfDay, '3 Bulan Terakhir');
+        // B. Bulan Lalu Periode Setara (1 s/d hari ini di bulan Oktober — Apple to Apple)
+        final startOkt = DateTime(now.year, now.month - 1, 1);
+        final endOktSetara = DateTime(now.year, now.month - 1, currentDay <= 31 ? currentDay : 31, 23, 59, 59);
+        final summaryOktSetara = await dashboardRepo.getKartuBulanIniSummary(startOkt, endOktSetara, '1-$currentDay Oktober ${now.year}');
+        final labaListOktSetara = await dashboardRepo.getLabaBersihHarian(startOkt, endOktSetara);
+        Decimal totalLabaBersihOktSetara = Decimal.zero;
+        Decimal totalOpsOktSetara = Decimal.zero;
+        for (final l in labaListOktSetara) {
+          totalLabaBersihOktSetara += l.labaBersih;
+          totalOpsOktSetara += l.totalPengeluaran;
+        }
 
-        dashboardContext = '''
-=== RINGKASAN AGREGASI KEUANGAN RESMI (DARI DASHBOARD & DATABASE SERVER) ===
-1. Kinerja Finansial Bulan Berjalan (${startOfMonth.day}/${startOfMonth.month}/${startOfMonth.year} s/d ${endOfDay.day}/${endOfDay.month}/${endOfDay.year}):
-- TOTAL OMZET PENJUALAN KE PABRIK PKS (PENDAPATAN KOTOR): Rp ${summaryBulanIni.penjualan.totalNilai} (${summaryBulanIni.penjualan.totalBeratBersihKg} kg dari ${summaryBulanIni.penjualan.jumlahTransaksi} pengiriman pabrik)
-- TOTAL PEMBELIAN TBS DARI PETANI (HPP TBS): Rp ${summaryBulanIni.pembelian.totalNilai} (${summaryBulanIni.pembelian.totalBeratBersihKg} kg dari ${summaryBulanIni.pembelian.jumlahTransaksi} nota petani)
-- MARGIN KOTOR PEMBELIAN VS PENJUALAN: Rp ${summaryBulanIni.margin}
-- TOTAL BIAYA PENGELUARAN OPERASIONAL: Rp $totalOpsBulanIni
-- ESTIMASI LABA BERSIH BULAN INI: Rp $totalLabaBersihBulanIni
+        // C. Bulan Lalu Penuh (1 s/d 31 Oktober)
+        final endOktPenuh = DateTime(now.year, now.month, 0, 23, 59, 59);
+        final summaryOktPenuh = await dashboardRepo.getKartuBulanIniSummary(startOkt, endOktPenuh, 'Oktober ${now.year} Penuh');
+        final labaListOktPenuh = await dashboardRepo.getLabaBersihHarian(startOkt, endOktPenuh);
+        Decimal totalLabaBersihOktPenuh = Decimal.zero;
+        Decimal totalOpsOktPenuh = Decimal.zero;
+        for (final l in labaListOktPenuh) {
+          totalLabaBersihOktPenuh += l.labaBersih;
+          totalOpsOktPenuh += l.totalPengeluaran;
+        }
 
-2. Akumulasi Historis 3 Bulan Terakhir (Mencakup data dari September s/d Sekarang):
-- Total Omzet Penjualan ke Pabrik: Rp ${summaryHistoris.penjualan.totalNilai} (${summaryHistoris.penjualan.totalBeratBersihKg} kg)
-- Total Pembelian Petani (HPP TBS): Rp ${summaryHistoris.pembelian.totalNilai} (${summaryHistoris.pembelian.totalBeratBersihKg} kg)
-- Total Margin Kotor Historis: Rp ${summaryHistoris.margin}
-Catatan Sistem: Database mencatat data operasional dari bulan September hingga sekarang secara berkesinambungan.
-''';
+        // D. Bulan September Penuh (1 s/d 30 September)
+        final startSep = DateTime(now.year, now.month - 2, 1);
+        final endSep = DateTime(now.year, now.month - 1, 0, 23, 59, 59);
+        final summarySep = await dashboardRepo.getKartuBulanIniSummary(startSep, endSep, 'September ${now.year}');
+        final labaListSep = await dashboardRepo.getLabaBersihHarian(startSep, endSep);
+        Decimal totalLabaBersihSep = Decimal.zero;
+        Decimal totalOpsSep = Decimal.zero;
+        for (final l in labaListSep) {
+          totalLabaBersihSep += l.labaBersih;
+          totalOpsSep += l.totalPengeluaran;
+        }
+
+        // E. Akumulasi Historis 3 Bulan Terakhir
+        final summaryHistoris = await dashboardRepo.getKartuBulanIniSummary(startSep, endOfDay, '3 Bulan Terakhir');
+
+        // F. Breakdown Kategori Buah, Pabrik, dan Pengeluaran (3 Bulan Terakhir)
+        final breakdownBuah = await dashboardRepo.getBreakdownJenisBuah(startSep, endOfDay);
+        final breakdownPabrik = await dashboardRepo.getBreakdownPabrik(startSep, endOfDay);
+        final breakdownPengeluaran = await dashboardRepo.getBreakdownPengeluaran(startSep, endOfDay);
+
+        final sb = StringBuffer();
+        sb.writeln('=== REKAPITULASI RESMI DATABASE SERVER RAMSAWIT (AKSES SELURUH TABEL) ===');
+        sb.writeln('');
+        sb.writeln('1. REKAPITULASI KOMPARASI MULTI-BULAN & ANALISIS PERIODIK:');
+        sb.writeln('A. BULAN BERJALAN (1 s/d $currentDay November ${now.year}):');
+        sb.writeln('- Omzet Penjualan ke Pabrik PKS: Rp ${summaryBulanIni.penjualan.totalNilai} (${summaryBulanIni.penjualan.totalBeratBersihKg} kg dari ${summaryBulanIni.penjualan.jumlahTransaksi} pengiriman DO)');
+        sb.writeln('- Pembelian TBS Petani (HPP TBS): Rp ${summaryBulanIni.pembelian.totalNilai} (${summaryBulanIni.pembelian.totalBeratBersihKg} kg dari ${summaryBulanIni.pembelian.jumlahTransaksi} nota petani)');
+        sb.writeln('- Margin Kotor: Rp ${summaryBulanIni.margin}');
+        sb.writeln('- Biaya Operasional: Rp $totalOpsBulanIni');
+        sb.writeln('- Estimasi Laba Bersih: Rp $totalLabaBersihBulanIni');
+        sb.writeln('');
+
+        sb.writeln('B. BULAN LALU — PERIODE SETARA APPLE-TO-APPLE (1 s/d $currentDay Oktober ${now.year}):');
+        sb.writeln('- Omzet Penjualan ke Pabrik PKS: Rp ${summaryOktSetara.penjualan.totalNilai} (${summaryOktSetara.penjualan.totalBeratBersihKg} kg dari ${summaryOktSetara.penjualan.jumlahTransaksi} pengiriman DO)');
+        sb.writeln('- Pembelian TBS Petani (HPP TBS): Rp ${summaryOktSetara.pembelian.totalNilai} (${summaryOktSetara.pembelian.totalBeratBersihKg} kg dari ${summaryOktSetara.pembelian.jumlahTransaksi} nota petani)');
+        sb.writeln('- Margin Kotor: Rp ${summaryOktSetara.margin}');
+        sb.writeln('- Biaya Operasional: Rp $totalOpsOktSetara');
+        sb.writeln('- Estimasi Laba Bersih: Rp $totalLabaBersihOktSetara');
+        sb.writeln('');
+
+        sb.writeln('C. BULAN LALU PENUH (1 s/d 31 Oktober ${now.year}):');
+        sb.writeln('- Omzet Penjualan Pabrik PKS: Rp ${summaryOktPenuh.penjualan.totalNilai} (${summaryOktPenuh.penjualan.totalBeratBersihKg} kg)');
+        sb.writeln('- Pembelian TBS Petani (HPP): Rp ${summaryOktPenuh.pembelian.totalNilai} (${summaryOktPenuh.pembelian.totalBeratBersihKg} kg)');
+        sb.writeln('- Margin Kotor: Rp ${summaryOktPenuh.margin}');
+        sb.writeln('- Biaya Operasional: Rp $totalOpsOktPenuh');
+        sb.writeln('- Estimasi Laba Bersih: Rp $totalLabaBersihOktPenuh');
+        sb.writeln('');
+
+        sb.writeln('D. BULAN SEPTEMBER PENUH (1 s/d 30 September ${now.year}):');
+        sb.writeln('- Omzet Penjualan Pabrik PKS: Rp ${summarySep.penjualan.totalNilai} (${summarySep.penjualan.totalBeratBersihKg} kg)');
+        sb.writeln('- Pembelian TBS Petani (HPP): Rp ${summarySep.pembelian.totalNilai} (${summarySep.pembelian.totalBeratBersihKg} kg)');
+        sb.writeln('- Margin Kotor: Rp ${summarySep.margin}');
+        sb.writeln('- Biaya Operasional: Rp $totalOpsSep');
+        sb.writeln('- Estimasi Laba Bersih: Rp $totalLabaBersihSep');
+        sb.writeln('');
+
+        sb.writeln('E. TOTAL AKUMULASI HISTORIS 3 BULAN (September s/d Sekarang):');
+        sb.writeln('- Total Omzet Penjualan: Rp ${summaryHistoris.penjualan.totalNilai} (${summaryHistoris.penjualan.totalBeratBersihKg} kg)');
+        sb.writeln('- Total Pembelian TBS Petani (HPP): Rp ${summaryHistoris.pembelian.totalNilai} (${summaryHistoris.pembelian.totalBeratBersihKg} kg)');
+        sb.writeln('- Total Margin Kotor: Rp ${summaryHistoris.margin}');
+        sb.writeln('');
+
+        if (breakdownBuah.isNotEmpty) {
+          final Map<String, ({Decimal bersih, Decimal nilai})> buahAgg = {};
+          for (final b in breakdownBuah) {
+            final existing = buahAgg[b.jenisBuah] ?? (bersih: Decimal.zero, nilai: Decimal.zero);
+            buahAgg[b.jenisBuah] = (
+              bersih: existing.bersih + b.totalBeratBersihKg,
+              nilai: existing.nilai + b.totalNilai,
+            );
+          }
+          sb.writeln('2. KOMPOSISI PASOKAN TBS (TABEL jenis_buah & v_breakdown_jenis_buah):');
+          buahAgg.forEach((nama, data) {
+            sb.writeln('- Jenis: $nama | Total Tonase Pasokan: ${data.bersih} kg | Total Pembelian: Rp ${data.nilai}');
+          });
+          sb.writeln('');
+        }
+
+        if (breakdownPabrik.isNotEmpty) {
+          final Map<String, ({Decimal bersih, Decimal nilai})> pabrikAgg = {};
+          for (final p in breakdownPabrik) {
+            final existing = pabrikAgg[p.namaPabrik] ?? (bersih: Decimal.zero, nilai: Decimal.zero);
+            pabrikAgg[p.namaPabrik] = (
+              bersih: existing.bersih + p.totalBeratBersihKg,
+              nilai: existing.nilai + p.totalNilaiJual,
+            );
+          }
+          sb.writeln('3. PERFORMA PABRIK PKS REKANAN (TABEL pabrik & v_breakdown_pabrik):');
+          pabrikAgg.forEach((nama, data) {
+            sb.writeln('- Pabrik: $nama | Tonase Bersih Diterima PKS: ${data.bersih} kg | Total Nilai Penjualan: Rp ${data.nilai}');
+          });
+          sb.writeln('');
+        }
+
+        if (breakdownPengeluaran.isNotEmpty) {
+          final Map<String, Decimal> expAgg = {};
+          for (final o in breakdownPengeluaran) {
+            final existing = expAgg[o.jenisPengeluaran] ?? Decimal.zero;
+            expAgg[o.jenisPengeluaran] = existing + o.totalNominal;
+          }
+          sb.writeln('4. RINCIAN POS BIAYA OPERASIONAL (TABEL pengeluaran & v_breakdown_jenis_pengeluaran):');
+          expAgg.forEach((nama, total) {
+            sb.writeln('- Kategori Biaya: $nama | Total Beban: Rp $total');
+          });
+          sb.writeln('');
+        }
+
+        dashboardContext = sb.toString();
       } catch (_) {}
 
-      // 3. Berikan jeda proses analisis wajar (300ms)
-      await Future.delayed(const Duration(milliseconds: 300));
+      // 3. Agentic Tool Executor: Menghubungkan Tool Calling LLM langsung ke database SQLite / Supabase
+      Future<String> executeDatabaseTool(String toolName, Map<String, dynamic> args) async {
+        try {
+          switch (toolName) {
+            case 'query_transaksi_pembelian':
+              final nama = (args['nama_petani'] as String?)?.toLowerCase().trim();
+              final kode = (args['kode_transaksi'] as String?)?.toLowerCase().trim();
+              final startStr = args['tanggal_mulai'] as String?;
+              final endStr = args['tanggal_akhir'] as String?;
+              final status = args['status'] as String?;
+              final limit = (args['limit'] as num?)?.toInt() ?? 20;
 
-      // 4. Proses kueri bisnis melalui Agentic LLM (dengan memori percakapan, agregasi finansial & fallback cerdas)
+              DateTime? start = startStr != null ? DateTime.tryParse(startStr) : null;
+              DateTime? end = endStr != null ? DateTime.tryParse(endStr) : null;
+
+              final list = await trxRepo.getFilteredRingkasanList(
+                startDate: start,
+                endDate: end,
+                status: status,
+              );
+
+              var filtered = list;
+              if (nama != null && nama.isNotEmpty) {
+                filtered = filtered.where((t) => t.namaPenjual.toLowerCase().contains(nama)).toList();
+              }
+              if (kode != null && kode.isNotEmpty) {
+                filtered = filtered.where((t) => t.kodeTransaksi.toLowerCase().contains(kode)).toList();
+              }
+
+              final items = filtered.take(limit).map((t) => {
+                'kode_transaksi': t.kodeTransaksi,
+                'tanggal': t.tanggalTransaksi.toIso8601String().split('T').first,
+                'nama_petani': t.namaPenjual,
+                'berat_kotor_kg': t.totalBeratKotorKg.toString(),
+                'berat_bersih_kg': t.totalBeratBersihKg.toString(),
+                'potongan_rp': t.totalPotonganRp.toString(),
+                'total_nilai_rp': t.totalNilai.toString(),
+                'status': t.status,
+                'jenis_pembayaran': t.jenisPembayaran,
+                'catatan': t.catatan ?? '-',
+              }).toList();
+
+              return jsonEncode({
+                'status': 'success',
+                'total_ditemukan': filtered.length,
+                'data': items,
+              });
+
+            case 'query_pengiriman_pabrik':
+              final pabrik = (args['nama_pabrik'] as String?)?.toLowerCase().trim();
+              final kode = (args['kode_pengiriman'] as String?)?.toLowerCase().trim();
+              final startStr = args['tanggal_mulai'] as String?;
+              final endStr = args['tanggal_akhir'] as String?;
+              final limit = (args['limit'] as num?)?.toInt() ?? 20;
+
+              DateTime? start = startStr != null ? DateTime.tryParse(startStr) : null;
+              DateTime? end = endStr != null ? DateTime.tryParse(endStr) : null;
+
+              final list = await pengirimanRepo.getPengirimanList(
+                startDate: start,
+                endDate: end,
+                searchQuery: kode,
+              );
+
+              var filtered = list;
+              if (pabrik != null && pabrik.isNotEmpty) {
+                filtered = filtered.where((k) {
+                  final name = (k.pabrik?.nama ?? k.pabrikId).toLowerCase();
+                  return name.contains(pabrik);
+                }).toList();
+              }
+
+              final items = filtered.take(limit).map((k) => {
+                'kode_pengiriman': k.kodePengiriman,
+                'tanggal': k.tanggalKirim.toIso8601String().split('T').first,
+                'pabrik': k.pabrik?.nama ?? k.pabrikId,
+                'berat_kirim_kg': k.beratDikirimKg.toString(),
+                'berat_sampai_kg': (k.beratSampaiKg ?? k.beratDiterimaKg ?? Decimal.zero).toString(),
+                'berat_bersih_pks_kg': (k.beratBersihKg ?? Decimal.zero).toString(),
+                'sortasi_persen': (k.persentasePotonganPabrik ?? Decimal.zero).toString(),
+                'harga_jual_per_kg': (k.hargaJualPerKg ?? Decimal.zero).toString(),
+                'total_nilai_jual': (k.totalNilaiJual ?? Decimal.zero).toString(),
+                'status': k.status,
+              }).toList();
+
+              return jsonEncode({
+                'status': 'success',
+                'total_ditemukan': filtered.length,
+                'data': items,
+              });
+
+            case 'get_rekap_finansial_periode':
+              final startStr = args['tanggal_mulai'] as String;
+              final endStr = args['tanggal_akhir'] as String;
+              final label = args['label_periode'] as String? ?? '$startStr s/d $endStr';
+
+              final start = DateTime.parse(startStr);
+              final end = DateTime.parse(endStr);
+              final endAdjusted = DateTime(end.year, end.month, end.day, 23, 59, 59);
+
+              final summary = await dashboardRepo.getKartuBulanIniSummary(start, endAdjusted, label);
+              final labaList = await dashboardRepo.getLabaBersihHarian(start, endAdjusted);
+              Decimal totalLaba = Decimal.zero;
+              Decimal totalOps = Decimal.zero;
+              for (final l in labaList) {
+                totalLaba += l.labaBersih;
+                totalOps += l.totalPengeluaran;
+              }
+
+              return jsonEncode({
+                'status': 'success',
+                'periode': label,
+                'omzet_penjualan_pabrik': summary.penjualan.totalNilai.toString(),
+                'tonase_jual_kg': summary.penjualan.totalBeratBersihKg.toString(),
+                'jumlah_do': summary.penjualan.jumlahTransaksi,
+                'beban_pembelian_petani_hpp': summary.pembelian.totalNilai.toString(),
+                'tonase_beli_kg': summary.pembelian.totalBeratBersihKg.toString(),
+                'jumlah_nota': summary.pembelian.jumlahTransaksi,
+                'margin_kotor': summary.margin.toString(),
+                'biaya_operasional': totalOps.toString(),
+                'laba_bersih': totalLaba.toString(),
+              });
+
+            case 'query_pengeluaran_operasional':
+              final kategori = (args['kategori'] as String?)?.toLowerCase().trim();
+              final startStr = args['tanggal_mulai'] as String?;
+              final endStr = args['tanggal_akhir'] as String?;
+              final limit = (args['limit'] as num?)?.toInt() ?? 20;
+
+              DateTime? start = startStr != null ? DateTime.tryParse(startStr) : null;
+              DateTime? end = endStr != null ? DateTime.tryParse(endStr) : null;
+
+              final res = await pengeluaranRepo.fetchPengeluaran(
+                startDate: start,
+                endDate: end,
+                pageSize: 100,
+              );
+
+              var filtered = res.items;
+              if (kategori != null && kategori.isNotEmpty) {
+                filtered = filtered.where((o) {
+                  final name = (o.jenisPengeluaranNama ?? '').toLowerCase();
+                  final ket = (o.keterangan ?? '').toLowerCase();
+                  return name.contains(kategori) || ket.contains(kategori);
+                }).toList();
+              }
+
+              final items = filtered.take(limit).map((o) => {
+                'id': o.id,
+                'tanggal': o.tanggalPengeluaran.toIso8601String().split('T').first,
+                'kategori': o.jenisPengeluaranNama ?? 'Operasional',
+                'keterangan': o.keterangan ?? '-',
+                'nominal': o.nominal.toString(),
+              }).toList();
+
+              return jsonEncode({
+                'status': 'success',
+                'total_ditemukan': filtered.length,
+                'data': items,
+              });
+
+            case 'get_status_saldo_kas':
+              final saldo = await saldoRepo.getSaldoRingkasan();
+              return jsonEncode({
+                'status': 'success',
+                'modal_awal_topup_disetor': saldo.totalTopup.toString(),
+                'total_pemakaian_beli_tbs': saldo.totalPemakaian.toString(),
+                'sisa_saldo_kas_operasional': saldo.sisaSaldo.toString(),
+                'kondisi': !saldo.isLowOrExhausted ? 'Aman' : 'Kritis / Habis',
+              });
+
+            case 'cari_petani_penjual':
+              final nama = (args['nama'] as String?)?.toLowerCase().trim();
+              final list = await penjualRepo.getPenjualList();
+              var filtered = list;
+              if (nama != null && nama.isNotEmpty) {
+                filtered = filtered.where((p) => p.nama.toLowerCase().contains(nama)).toList();
+              }
+              final items = filtered.take(20).map((p) => {
+                'id': p.id,
+                'nama': p.nama,
+                'no_telepon': p.noTelepon ?? '-',
+                'alamat': p.alamat ?? '-',
+                'status_aktif': p.isActive,
+              }).toList();
+
+              return jsonEncode({
+                'status': 'success',
+                'total_petani': filtered.length,
+                'data': items,
+              });
+
+            default:
+              return jsonEncode({'status': 'error', 'message': 'Tool tidak dikenal: $toolName'});
+          }
+        } catch (e) {
+          return jsonEncode({'status': 'error', 'message': e.toString()});
+        }
+      }
+
+      // 4. Berikan jeda proses analisis wajar (200ms)
+      await Future.delayed(const Duration(milliseconds: 200));
+
+      // 5. Proses kueri bisnis melalui Agentic LLM (dengan Agentic Tool Calling, memori percakapan, dan fallback cerdas)
       final queryResponse = await AiAgenticService.processWithAgenticLlm(
         query: trimmed,
         transaksiList: allTrx,
         pengirimanList: allKrm,
         pengeluaranList: allPengeluaran,
         pabrikList: allPabrik,
+        penjualList: allPenjual,
+        jenisBuahList: allJenisBuah,
+        saldoRingkasan: saldoSummary,
         chatHistory: state.chatMessages,
         dashboardFinancialContext: dashboardContext,
+        toolExecutor: executeDatabaseTool,
       );
 
       final aiMsg = AiChatMessage(
