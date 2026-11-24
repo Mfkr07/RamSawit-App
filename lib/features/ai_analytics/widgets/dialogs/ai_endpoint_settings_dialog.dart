@@ -142,6 +142,8 @@ class _AiEndpointSettingsDialogState extends State<AiEndpointSettingsDialog> {
 
       final headers = {
         'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Connection': 'close',
         if (key.isNotEmpty) 'Authorization': 'Bearer $key',
       };
 

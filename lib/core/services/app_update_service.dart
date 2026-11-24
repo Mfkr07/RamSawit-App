@@ -83,7 +83,7 @@ class AppUpdateInfo {
 
 /// Service untuk mengecek versi terbaru dari Portal Web RamSawit
 class AppUpdateService {
-  static const String currentAppVersion = '2.5.8';
+  static const String currentAppVersion = '2.5.9';
   static const String _keyPortalUrl = 'ramsawit_portal_update_url';
   static const String defaultPortalUrl = 'https://ramsawit-portal.vercel.app';
 

@@ -243,6 +243,38 @@ class AiAgenticService {
     return result;
   }
 
+  /// Melakukan HTTP POST dengan soket terisolasi (client.close) dan auto-retry 1x
+  /// untuk mengantisipasi 'Connection reset by peer (errno 104)' pada tunnel / mobile relay.
+  static Future<http.Response> _postWithAutoRetry({
+    required Uri uri,
+    required Map<String, String> headers,
+    required String body,
+    Duration timeout = const Duration(seconds: 40),
+  }) async {
+    int attempts = 0;
+    while (true) {
+      attempts++;
+      final client = http.Client();
+      try {
+        final request = http.Request('POST', uri)
+          ..headers.addAll(headers)
+          ..body = body;
+
+        final streamed = await client.send(request).timeout(timeout);
+        final response = await http.Response.fromStream(streamed);
+        return response;
+      } catch (e) {
+        // Jika gagal karena error soket/jaringan pada percobaan pertama, coba lagi 1x dengan soket baru
+        if (attempts >= 2) {
+          rethrow;
+        }
+        await Future.delayed(const Duration(milliseconds: 600));
+      } finally {
+        client.close();
+      }
+    }
+  }
+
   /// Memanggil LLM dengan System Prompt cerdas berisi data operasional riil TBS sawit & memori percakapan
   static Future<AiQueryResponse> processWithAgenticLlm({
     required String query,
@@ -333,6 +365,8 @@ PANDUAN INTERAKSI & REASONING (WAJIB DIPATUHI):
 
       final headers = {
         'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Connection': 'close',
         if (config.apiKey.trim().isNotEmpty)
           'Authorization': 'Bearer ${config.apiKey.trim()}',
       };
@@ -348,10 +382,23 @@ PANDUAN INTERAKSI & REASONING (WAJIB DIPATUHI):
             ? chatHistory.sublist(chatHistory.length - 6)
             : chatHistory;
         for (final msg in recentHistory) {
-          messagesPayload.add({
-            'role': msg.isUser ? 'user' : 'assistant',
-            'content': msg.text,
-          });
+          var text = msg.text.trim();
+          // Bersihkan catatan sistem dan tips dari riwayat agar payload transfer tidak kotor
+          text = text.replaceAll(RegExp(r'\n+>\s*\*⚠️ Catatan Sistem:[^\*]+\*.*', dotAll: true), '');
+          text = text.replaceAll(RegExp(r'\n+>\s*\*💡 Catatan:[^\*]+\*.*', dotAll: true), '');
+          text = text.trim();
+
+          // Jika pesan asisten sangat panjang, pangkas secukupnya agar payload jaringan mobile tetap efisien
+          if (!msg.isUser && text.length > 600) {
+            text = '${text.substring(0, 600)}...\n[Rincian sebelumnya dipangkas untuk efisiensi jaringan]';
+          }
+
+          if (text.isNotEmpty) {
+            messagesPayload.add({
+              'role': msg.isUser ? 'user' : 'assistant',
+              'content': text,
+            });
+          }
         }
       }
 
@@ -379,9 +426,12 @@ PANDUAN INTERAKSI & REASONING (WAJIB DIPATUHI):
           requestBodyMap['tool_choice'] = 'auto';
         }
 
-        var response = await http
-            .post(Uri.parse(endpoint), headers: headers, body: jsonEncode(requestBodyMap))
-            .timeout(const Duration(seconds: 35));
+        var response = await _postWithAutoRetry(
+          uri: Uri.parse(endpoint),
+          headers: headers,
+          body: jsonEncode(requestBodyMap),
+          timeout: const Duration(seconds: 40),
+        );
 
         lastStatusCode = response.statusCode;
 
@@ -389,9 +439,12 @@ PANDUAN INTERAKSI & REASONING (WAJIB DIPATUHI):
         if (step == 1 && response.statusCode == 400 && requestBodyMap.containsKey('tools')) {
           requestBodyMap.remove('tools');
           requestBodyMap.remove('tool_choice');
-          response = await http
-              .post(Uri.parse(endpoint), headers: headers, body: jsonEncode(requestBodyMap))
-              .timeout(const Duration(seconds: 35));
+          response = await _postWithAutoRetry(
+            uri: Uri.parse(endpoint),
+            headers: headers,
+            body: jsonEncode(requestBodyMap),
+            timeout: const Duration(seconds: 40),
+          );
           lastStatusCode = response.statusCode;
         }
 
@@ -482,9 +535,12 @@ PANDUAN INTERAKSI & REASONING (WAJIB DIPATUHI):
       );
 
       final isLocalhost = config.baseUrl.contains('localhost') || config.baseUrl.contains('127.0.0.1');
+      final isTunnel = config.baseUrl.contains('tunnel') || config.baseUrl.contains('abc-tunnel');
       final mobileTip = isLocalhost
           ? '\n\n> *💡 Catatan: Aplikasi dijalankan pada perangkat Android / jaringan eksternal sehingga alamat `localhost` tidak dapat dijangkau. Buka Pengaturan AI (ikon ⚙️) dan gunakan provider Cloud resmi seperti Google Gemini atau Groq dengan API Key gratis.*'
-          : '';
+          : isTunnel
+              ? '\n\n> *💡 Catatan: Relay tunnel gratis (seperti abc-tunnel) memutus koneksi socket saat idle atau riwayat chat membesar. Rekomendasi: Gunakan preset Google Gemini Cloud langsung (tanpa perlu laptop & tunnel) di Pengaturan AI (⚙️).*'
+              : '';
 
       return AiQueryResponse(
         text: '${localRes.text}\n\n> *⚠️ Catatan Sistem: Tidak dapat menghubungi endpoint AI ($e). Menampilkan analisis cadangan lokal.*$mobileTip',

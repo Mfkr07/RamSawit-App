@@ -89,6 +89,23 @@ class _AiAnalyticsPageState extends ConsumerState<AiAnalyticsPage> {
                           ),
                         ),
                         IconButton(
+                          icon: const Icon(Icons.refresh, size: 20, color: AppColors.inkMuted),
+                          tooltip: 'Bersihkan Riwayat Percakapan',
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                          onPressed: () {
+                            controller.clearChat();
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Riwayat percakapan telah dibersihkan.'),
+                                duration: Duration(seconds: 2),
+                                behavior: SnackBarBehavior.floating,
+                              ),
+                            );
+                          },
+                        ),
+                        const SizedBox(width: 10),
+                        IconButton(
                           icon: const Icon(Icons.settings, size: 18, color: AppColors.inkMuted),
                           tooltip: 'Pengaturan Endpoint AI (Ollama/9router/OpenAI)',
                           padding: EdgeInsets.zero,
