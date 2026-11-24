@@ -1,7 +1,7 @@
 # Rules & Panduan Pengembangan Proyek
 ## Aplikasi Transaksi Jual Beli Buah Kelapa Sawit (TBS)
 
-Dokumen ini adalah ringkasan aturan teknis dan konvensi arsitektur proyek yang wajib dipatuhi oleh seluruh AI coding agent dan pengembang. Sumber kebenaran utama (Single Source of Truth) dari struktur database, requirement, dan desain merujuk pada `doc/PRD-Aplikasi-Transaksi-Sawit.md`, `doc/Database-Aplikasi-Transaksi-Sawit.md`, dan `doc/DESIGN.md`.
+Dokumen ini adalah ringkasan aturan teknis dan konvensi arsitektur proyek yang wajib dipatuhi oleh seluruh AI coding agent dan pengembang. Sumber kebenaran utama (Single Source of Truth) dari struktur database, requirement, dan desain merujuk pada `doc/PRD-RamSawit.md`, `doc/Database-RamSawit.md`, dan `doc/DESIGN.md`.
 
 ---
 
@@ -98,7 +98,7 @@ windows/                           # Runner desktop Windows (root project)
   - Total berat transaksi (`total_berat_kg`) dan total pembayaran (`total_harga`) **WAJIB bersumber dari database** melalui view `v_transaksi_ringkasan` atau query agregasi database, bukan hasil sum() manual yang tercecer di berbagai file Flutter client.
   - Perhitungan di form input transaksi client hanya berfungsi sebagai *live preview* interaktif sebelum data di-submit ke Supabase.
 - **Imutabilitas Skema Database**:
-  - Dilarang mengubah struktur tabel, nama kolom, view, tipe data, atau constraint yang sudah ditetapkan pada `doc/PRD-Aplikasi-Transaksi-Sawit.md` dan `doc/Database-Aplikasi-Transaksi-Sawit.md` tanpa persetujuan eksplisit dari pemilik proyek.
+  - Dilarang mengubah struktur tabel, nama kolom, view, tipe data, atau constraint yang sudah ditetapkan pada `doc/PRD-RamSawit.md` dan `doc/Database-RamSawit.md` tanpa persetujuan eksplisit dari pemilik proyek.
 - **Audit & Keamanan**:
   - Transaksi tidak boleh dihapus secara permanen (`DELETE`), melainkan melalui perubahan status menjadi `'dibatalkan'` disertai pencatatan alasan.
   - Setiap mutasi data menyertakan referensi `created_by` dari authenticated user (`auth.uid()`).
