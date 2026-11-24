@@ -14,11 +14,26 @@ import 'widgets/ai_kpi_overview_card.dart';
 /// - Tata letak monokromatik enterprise dengan aksen warna semantik
 /// - Kartu KPI cerdas, deteksi anomali sortasi, rekomendasi harga TBS
 /// - Asisten konsultasi interaktif berbasis konteks data riil TBS Sawit
-class AiAnalyticsPage extends ConsumerWidget {
+class AiAnalyticsPage extends ConsumerStatefulWidget {
   const AiAnalyticsPage({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<AiAnalyticsPage> createState() => _AiAnalyticsPageState();
+}
+
+class _AiAnalyticsPageState extends ConsumerState<AiAnalyticsPage> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        ref.read(aiAnalyticsControllerProvider.notifier).refreshInsights();
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final state = ref.watch(aiAnalyticsControllerProvider);
     final controller = ref.read(aiAnalyticsControllerProvider.notifier);
 

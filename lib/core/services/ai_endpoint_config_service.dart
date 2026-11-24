@@ -15,11 +15,14 @@ class AiEndpointConfig {
     this.isEnabled = true,
   });
 
+  /// Default API Key bawaan untuk 9router lokal
+  static const default9RouterKey = 'sk-66e08effc02f9916-2mrqwi-c58ba80f';
+
   /// Default bawaan: 9router Local proxy port 20128
   factory AiEndpointConfig.defaultConfig() {
     return const AiEndpointConfig(
       baseUrl: 'http://localhost:20128/v1',
-      apiKey: '',
+      apiKey: default9RouterKey,
       modelName: 'ag/gemini-3.8-flash-medium',
       isEnabled: true,
     );
@@ -83,6 +86,11 @@ class AiEndpointConfigService {
         apiKey = await _storage.read(key: _keyApiKey) ?? '';
       } catch (_) {
         apiKey = prefs.getString(_keyApiKey) ?? '';
+      }
+
+      // Jika menggunakan 9router lokal dan belum ada API key, gunakan default key
+      if (apiKey.trim().isEmpty && baseUrl.contains('20128')) {
+        apiKey = AiEndpointConfig.default9RouterKey;
       }
 
       return AiEndpointConfig(

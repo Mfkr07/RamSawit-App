@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../models/ai_insight.dart';
@@ -112,6 +113,13 @@ class _AiChatAdvisorWidgetState extends ConsumerState<AiChatAdvisorWidget> {
                         ),
                       ],
                     ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.delete_sweep_outlined, size: 18, color: AppColors.inkMuted),
+                    tooltip: 'Bersihkan Riwayat Percakapan',
+                    onPressed: () {
+                      ref.read(aiAnalyticsControllerProvider.notifier).clearChat();
+                    },
                   ),
                   IconButton(
                     icon: const Icon(Icons.settings, size: 18, color: AppColors.inkMuted),
@@ -303,6 +311,26 @@ class _AiChatAdvisorWidgetState extends ConsumerState<AiChatAdvisorWidget> {
                   color: AppColors.inkSubtle,
                 ),
               ),
+              if (!isUser) ...[
+                const SizedBox(width: 8),
+                InkWell(
+                  onTap: () {
+                    Clipboard.setData(ClipboardData(text: msg.text));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Teks jawaban AI disalin ke papan klip.'),
+                        duration: Duration(seconds: 2),
+                        behavior: SnackBarBehavior.floating,
+                      ),
+                    );
+                  },
+                  borderRadius: BorderRadius.circular(2),
+                  child: const Padding(
+                    padding: EdgeInsets.all(2.0),
+                    child: Icon(Icons.copy, size: 12, color: AppColors.inkSubtle),
+                  ),
+                ),
+              ],
             ],
           ),
           const SizedBox(height: 4),
@@ -411,23 +439,114 @@ class _AiChatAdvisorWidgetState extends ConsumerState<AiChatAdvisorWidget> {
   }
 
   Widget _renderFormattedText(String text) {
-    // Sederhana: Pisahkan bold (**teks**) dan baris normal
     final lines = text.split('\n');
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: lines.map((line) {
-        if (line.trim().isEmpty) {
+        final trimmed = line.trim();
+        if (trimmed.isEmpty) {
           return const SizedBox(height: 6);
         }
+
+        // Header level 3
+        if (trimmed.startsWith('### ')) {
+          return Padding(
+            padding: const EdgeInsets.only(top: 8.0, bottom: 4.0),
+            child: Text(
+              trimmed.substring(4),
+              style: const TextStyle(
+                fontSize: 13.5,
+                fontWeight: FontWeight.w700,
+                color: AppColors.ink,
+                letterSpacing: 0.3,
+              ),
+            ),
+          );
+        }
+
+        // Header level 2
+        if (trimmed.startsWith('## ')) {
+          return Padding(
+            padding: const EdgeInsets.only(top: 10.0, bottom: 4.0),
+            child: Text(
+              trimmed.substring(3),
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: AppColors.primary,
+                letterSpacing: 0.3,
+              ),
+            ),
+          );
+        }
+
+        // Blockquote
+        if (trimmed.startsWith('> ')) {
+          return Container(
+            margin: const EdgeInsets.symmetric(vertical: 4.0),
+            padding: const EdgeInsets.symmetric(horizontal: 10.0, vertical: 6.0),
+            decoration: BoxDecoration(
+              color: AppColors.surface1,
+              border: const Border(
+                left: BorderSide(color: AppColors.primary, width: 2.5),
+              ),
+            ),
+            child: Text.rich(
+              _buildInlineTextSpans(trimmed.substring(2)),
+              style: const TextStyle(
+                fontSize: 12,
+                fontStyle: FontStyle.italic,
+                color: AppColors.inkMuted,
+                height: 1.35,
+              ),
+            ),
+          );
+        }
+
+        // List item (bullet atau nomor)
+        final isBullet = trimmed.startsWith('- ') || trimmed.startsWith('* ') || trimmed.startsWith('• ');
+        final isNumber = RegExp(r'^\d+\.\s').hasMatch(trimmed);
+
+        if (isBullet || isNumber) {
+          final prefix = isBullet ? '• ' : trimmed.substring(0, trimmed.indexOf(' ') + 1);
+          final content = trimmed.substring(prefix.length);
+
+          return Padding(
+            padding: const EdgeInsets.only(left: 6.0, bottom: 4.0),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  prefix,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: isNumber ? FontWeight.w600 : FontWeight.bold,
+                    color: AppColors.primary,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text.rich(
+                    _buildInlineTextSpans(content),
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: AppColors.ink,
+                      height: 1.35,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        // Paragraf umum dengan inline styling
         return Padding(
-          padding: const EdgeInsets.only(bottom: 3.0),
-          child: Text(
-            line.replaceAll('**', ''),
-            style: TextStyle(
+          padding: const EdgeInsets.only(bottom: 4.0),
+          child: Text.rich(
+            _buildInlineTextSpans(line),
+            style: const TextStyle(
               fontSize: 13,
-              fontWeight: line.contains('**') && !line.startsWith('•')
-                  ? FontWeight.w600
-                  : FontWeight.normal,
               color: AppColors.ink,
               height: 1.35,
             ),
@@ -435,6 +554,49 @@ class _AiChatAdvisorWidgetState extends ConsumerState<AiChatAdvisorWidget> {
         );
       }).toList(),
     );
+  }
+
+  TextSpan _buildInlineTextSpans(String text) {
+    final spans = <TextSpan>[];
+    final pattern = RegExp(r'(\*\*(.*?)\*\*|`([^`]+)`)');
+    int lastEnd = 0;
+
+    for (final match in pattern.allMatches(text)) {
+      if (match.start > lastEnd) {
+        spans.add(TextSpan(text: text.substring(lastEnd, match.start)));
+      }
+
+      final boldGroup = match.group(2);
+      final codeGroup = match.group(3);
+
+      if (boldGroup != null) {
+        spans.add(TextSpan(
+          text: boldGroup,
+          style: const TextStyle(
+            fontWeight: FontWeight.w700,
+            color: AppColors.ink,
+          ),
+        ));
+      } else if (codeGroup != null) {
+        spans.add(TextSpan(
+          text: codeGroup,
+          style: const TextStyle(
+            fontFamily: 'monospace',
+            backgroundColor: Color(0x1F808080),
+            fontWeight: FontWeight.w600,
+            fontSize: 12,
+          ),
+        ));
+      }
+
+      lastEnd = match.end;
+    }
+
+    if (lastEnd < text.length) {
+      spans.add(TextSpan(text: text.substring(lastEnd)));
+    }
+
+    return TextSpan(children: spans);
   }
 
   String _formatTime(DateTime dt) {
