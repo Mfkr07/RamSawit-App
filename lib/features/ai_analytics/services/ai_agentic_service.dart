@@ -50,6 +50,11 @@ class AiAgenticService {
               'type': 'string',
               'description': 'Status nota: selesai atau dibatalkan',
             },
+            'urutan': {
+              'type': 'string',
+              'enum': ['terbaru', 'terlama'],
+              'description': 'Urutan data berdasarkan tanggal transaksi: terbaru (descending) atau terlama (ascending). Gunakan terlama untuk mencari pembelian pertama.',
+            },
             'limit': {
               'type': 'integer',
               'description': 'Jumlah maksimal baris data (default 20)',
@@ -82,6 +87,11 @@ class AiAgenticService {
             'tanggal_akhir': {
               'type': 'string',
               'description': 'Format tanggal akhir YYYY-MM-DD',
+            },
+            'urutan': {
+              'type': 'string',
+              'enum': ['terbaru', 'terlama'],
+              'description': 'Urutan berdasarkan tanggal pengiriman: terbaru atau terlama.',
             },
             'limit': {
               'type': 'integer',
@@ -351,117 +361,103 @@ PANDUAN INTERAKSI & REASONING (WAJIB DIPATUHI):
           ? config.modelName.trim()
           : 'ag/gemini-3.8-flash-medium';
 
-      final requestBodyMap = <String, dynamic>{
-        'model': modelName,
-        'messages': messagesPayload,
-        'temperature': 0.2,
-        'stream': false,
-      };
+      int step = 0;
+      const maxSteps = 4;
+      int lastStatusCode = 200;
 
-      if (toolExecutor != null) {
-        requestBodyMap['tools'] = _databaseTools;
-        requestBodyMap['tool_choice'] = 'auto';
-      }
+      while (step < maxSteps) {
+        step++;
+        final requestBodyMap = <String, dynamic>{
+          'model': modelName,
+          'messages': messagesPayload,
+          'temperature': 0.2,
+          'stream': false,
+        };
 
-      var response = await http
-          .post(Uri.parse(endpoint), headers: headers, body: jsonEncode(requestBodyMap))
-          .timeout(const Duration(seconds: 25));
+        if (toolExecutor != null && step < maxSteps) {
+          requestBodyMap['tools'] = _databaseTools;
+          requestBodyMap['tool_choice'] = 'auto';
+        }
 
-      // Jika endpoint mengembalikan HTTP 400 (misal model/proxy tidak support tools parameter), retry tanpa tools
-      if (response.statusCode == 400 && requestBodyMap.containsKey('tools')) {
-        requestBodyMap.remove('tools');
-        requestBodyMap.remove('tool_choice');
-        response = await http
+        var response = await http
             .post(Uri.parse(endpoint), headers: headers, body: jsonEncode(requestBodyMap))
-            .timeout(const Duration(seconds: 25));
-      }
+            .timeout(const Duration(seconds: 35));
 
-      if (response.statusCode == 200) {
+        lastStatusCode = response.statusCode;
+
+        // Jika endpoint mengembalikan HTTP 400 di turn 1 (misal proxy tidak support tools parameter), retry tanpa tools
+        if (step == 1 && response.statusCode == 400 && requestBodyMap.containsKey('tools')) {
+          requestBodyMap.remove('tools');
+          requestBodyMap.remove('tool_choice');
+          response = await http
+              .post(Uri.parse(endpoint), headers: headers, body: jsonEncode(requestBodyMap))
+              .timeout(const Duration(seconds: 35));
+          lastStatusCode = response.statusCode;
+        }
+
+        if (response.statusCode != 200) {
+          break;
+        }
+
         final Map<String, dynamic> data = jsonDecode(response.body);
         final choices = data['choices'] as List<dynamic>?;
-        if (choices != null && choices.isNotEmpty) {
-          final choiceMsg = choices[0]['message'] as Map<String, dynamic>?;
-          final toolCalls = choiceMsg?['tool_calls'] as List<dynamic>?;
+        if (choices == null || choices.isEmpty) {
+          break;
+        }
 
-          // JIKA LLM MEMANGGIL ALAT DATABASE (AGENTIC TOOL CALLING):
-          if (toolCalls != null && toolCalls.isNotEmpty && toolExecutor != null) {
+        final choiceMsg = choices[0]['message'] as Map<String, dynamic>?;
+        final toolCalls = choiceMsg?['tool_calls'] as List<dynamic>?;
+
+        // JIKA LLM MEMANGGIL ALAT DATABASE (AGENTIC TOOL CALLING):
+        if (toolCalls != null && toolCalls.isNotEmpty && toolExecutor != null) {
+          messagesPayload.add({
+            'role': 'assistant',
+            'content': choiceMsg?['content'] ?? '',
+            'tool_calls': toolCalls,
+          });
+
+          for (final tc in toolCalls) {
+            final toolCallId = tc['id'] as String? ?? 'call_${DateTime.now().millisecondsSinceEpoch}';
+            final fn = tc['function'] as Map<String, dynamic>? ?? {};
+            final toolName = fn['name'] as String? ?? '';
+            final argsRaw = fn['arguments'];
+            Map<String, dynamic> args = {};
+            if (argsRaw is String && argsRaw.trim().isNotEmpty) {
+              try {
+                args = jsonDecode(argsRaw) as Map<String, dynamic>;
+              } catch (_) {}
+            } else if (argsRaw is Map<String, dynamic>) {
+              args = argsRaw;
+            }
+
+            final toolResultJson = await toolExecutor(toolName, args);
+
             messagesPayload.add({
-              'role': 'assistant',
-              'content': choiceMsg?['content'] ?? '',
-              'tool_calls': toolCalls,
+              'role': 'tool',
+              'tool_call_id': toolCallId,
+              'content': toolResultJson,
             });
-
-            for (final tc in toolCalls) {
-              final toolCallId = tc['id'] as String? ?? 'call_${DateTime.now().millisecondsSinceEpoch}';
-              final fn = tc['function'] as Map<String, dynamic>? ?? {};
-              final toolName = fn['name'] as String? ?? '';
-              final argsRaw = fn['arguments'];
-              Map<String, dynamic> args = {};
-              if (argsRaw is String && argsRaw.trim().isNotEmpty) {
-                try {
-                  args = jsonDecode(argsRaw) as Map<String, dynamic>;
-                } catch (_) {}
-              } else if (argsRaw is Map<String, dynamic>) {
-                args = argsRaw;
-              }
-
-              final toolResultJson = await toolExecutor(toolName, args);
-
-              messagesPayload.add({
-                'role': 'tool',
-                'tool_call_id': toolCallId,
-                'content': toolResultJson,
-              });
-            }
-
-            final secondRequestBody = {
-              'model': modelName,
-              'messages': messagesPayload,
-              'temperature': 0.2,
-              'stream': false,
-            };
-
-            final secondResponse = await http
-                .post(Uri.parse(endpoint), headers: headers, body: jsonEncode(secondRequestBody))
-                .timeout(const Duration(seconds: 25));
-
-            if (secondResponse.statusCode == 200) {
-              final Map<String, dynamic> secondData = jsonDecode(secondResponse.body);
-              final secondChoices = secondData['choices'] as List<dynamic>?;
-              if (secondChoices != null && secondChoices.isNotEmpty) {
-                final finalMsg = secondChoices[0]['message'] as Map<String, dynamic>?;
-                final finalContent = finalMsg?['content'] as String? ?? '';
-                if (finalContent.trim().isNotEmpty) {
-                  return AiQueryResponse(
-                    text: sanitizeAiText(finalContent.trim()),
-                    suggestions: [
-                      'Berapa laba bersih periode ini?',
-                      'Pabrik mana yang potongan sortasinya paling rendah?',
-                      'Rekomendasi harga beli TBS ke petani hari ini?',
-                    ],
-                  );
-                }
-              }
-            }
           }
+          // Lanjut ke langkah penalaran berikutnya dengan hasil tool
+          continue;
+        }
 
-          // JIKA TIDAK ADA TOOL CALL (Langsung menghasilkan teks):
-          final content = choiceMsg?['content'] as String? ?? '';
-          if (content.trim().isNotEmpty) {
-            final cleanedText = sanitizeAiText(content.trim());
-            return AiQueryResponse(
-              text: cleanedText,
-              suggestions: [
-                'Berapa laba bersih periode ini?',
-                'Pabrik mana yang potongan sortasinya paling rendah?',
-                'Rekomendasi harga beli TBS ke petani hari ini?',
-              ],
-            );
-          }
+        // JIKA LLM MENGHASILKAN TEKS JAWABAN AKHIR:
+        final rawContent = choiceMsg?['content'] as String? ?? choiceMsg?['reasoning_content'] as String? ?? '';
+        if (rawContent.trim().isNotEmpty) {
+          final cleanedText = sanitizeAiText(rawContent.trim());
+          return AiQueryResponse(
+            text: cleanedText,
+            suggestions: [
+              'Berapa laba bersih periode ini?',
+              'Pabrik mana yang potongan sortasinya paling rendah?',
+              'Rekomendasi harga beli TBS ke petani hari ini?',
+            ],
+          );
         }
       }
 
-      // Jika response gagal/error kode HTTP selain 200, fallback ke internal processor dengan catatan transparan
+      // Jika response gagal/error kode HTTP selain 200 atau gagal menghasilkan teks setelah loop tools
       final localRes = await AiBusinessQueryService.processQuery(
         query: query,
         transaksiList: transaksiList,
@@ -471,7 +467,7 @@ PANDUAN INTERAKSI & REASONING (WAJIB DIPATUHI):
       );
 
       return AiQueryResponse(
-        text: '${localRes.text}\n\n> *⚠️ Catatan Sistem: Layanan AI eksternal merespons dengan kode ${response.statusCode}. Menampilkan analisis aturan bisnis cadangan lokal.*',
+        text: '${localRes.text}\n\n> *⚠️ Catatan Sistem: Layanan AI eksternal merespons dengan kode $lastStatusCode. Menampilkan analisis aturan bisnis cadangan lokal.*',
         suggestions: localRes.suggestions,
         metrics: localRes.metrics,
       );

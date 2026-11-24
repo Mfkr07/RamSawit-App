@@ -654,18 +654,45 @@ class AiAnalyticsController extends StateNotifier<AiAnalyticsState> {
                 filtered = filtered.where((t) => t.kodeTransaksi.toLowerCase().contains(kode)).toList();
               }
 
-              final items = filtered.take(limit).map((t) => {
-                'kode_transaksi': t.kodeTransaksi,
-                'tanggal': t.tanggalTransaksi.toIso8601String().split('T').first,
-                'nama_petani': t.namaPenjual,
-                'berat_kotor_kg': t.totalBeratKotorKg.toString(),
-                'berat_bersih_kg': t.totalBeratBersihKg.toString(),
-                'potongan_rp': t.totalPotonganRp.toString(),
-                'total_nilai_rp': t.totalNilai.toString(),
-                'status': t.status,
-                'jenis_pembayaran': t.jenisPembayaran,
-                'catatan': t.catatan ?? '-',
-              }).toList();
+              final urutanTrx = (args['urutan'] as String?)?.toLowerCase().trim();
+              if (urutanTrx == 'terlama') {
+                filtered.sort((a, b) => a.tanggalTransaksi.compareTo(b.tanggalTransaksi));
+              } else {
+                filtered.sort((a, b) => b.tanggalTransaksi.compareTo(a.tanggalTransaksi));
+              }
+
+              final limitedList = filtered.take(limit).toList();
+              final items = <Map<String, dynamic>>[];
+              for (final t in limitedList) {
+                final map = <String, dynamic>{
+                  'kode_transaksi': t.kodeTransaksi,
+                  'tanggal': t.tanggalTransaksi.toIso8601String().split('T').first,
+                  'nama_petani': t.namaPenjual,
+                  'berat_kotor_kg': t.totalBeratKotorKg.toString(),
+                  'berat_bersih_kg': t.totalBeratBersihKg.toString(),
+                  'potongan_rp': t.totalPotonganRp.toString(),
+                  'total_nilai_rp': t.totalNilai.toString(),
+                  'status': t.status,
+                  'jenis_pembayaran': t.jenisPembayaran,
+                  'catatan': t.catatan ?? '-',
+                };
+                if (kode != null || limitedList.length <= 5) {
+                  try {
+                    final detail = await trxRepo.getTransaksiDetail(t.id);
+                    if (detail.items != null && detail.items!.isNotEmpty) {
+                      map['rincian_item_buah'] = detail.items!.map((it) => {
+                        'jenis_buah': it.jenisBuah?.nama ?? 'TBS',
+                        'berat_kotor_kg': it.beratKotorKg.toString(),
+                        'persentase_potongan': '${it.persentasePotongan}%',
+                        'berat_bersih_kg': it.beratBersihKg.toString(),
+                        'harga_per_kg': 'Rp ${it.hargaPerKg}',
+                        'subtotal_rp': 'Rp ${it.subtotal}',
+                      }).toList();
+                    }
+                  } catch (_) {}
+                }
+                items.add(map);
+              }
 
               return jsonEncode({
                 'status': 'success',
@@ -695,6 +722,13 @@ class AiAnalyticsController extends StateNotifier<AiAnalyticsState> {
                   final name = (k.pabrik?.nama ?? k.pabrikId).toLowerCase();
                   return name.contains(pabrik);
                 }).toList();
+              }
+
+              final urutanKirim = (args['urutan'] as String?)?.toLowerCase().trim();
+              if (urutanKirim == 'terlama') {
+                filtered.sort((a, b) => a.tanggalKirim.compareTo(b.tanggalKirim));
+              } else {
+                filtered.sort((a, b) => b.tanggalKirim.compareTo(a.tanggalKirim));
               }
 
               final items = filtered.take(limit).map((k) => {

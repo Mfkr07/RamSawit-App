@@ -297,7 +297,7 @@ class _MainLayoutPageState extends ConsumerState<MainLayoutPage> {
                       tileColor: Colors.transparent,
                       leading: const Icon(Icons.system_update_alt, color: AppColors.primary, size: 20),
                       title: const Text('Periksa Pembaruan', style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.w600)),
-                      subtitle: const Text('Versi v2.5.4', style: TextStyle(fontSize: 11, color: AppColors.inkMuted)),
+                      subtitle: const Text('Versi v${AppUpdateService.currentAppVersion}', style: TextStyle(fontSize: 11, color: AppColors.inkMuted)),
                       onTap: () {
                         Navigator.pop(context);
                         _handleCheckUpdate();
@@ -597,7 +597,7 @@ class _MainLayoutPageState extends ConsumerState<MainLayoutPage> {
                     ),
                   ),
                   subtitle: const Text(
-                    'Versi v2.5.4',
+                    'Versi v${AppUpdateService.currentAppVersion}',
                     style: TextStyle(fontSize: 10, color: AppColors.inkMuted),
                   ),
                   onTap: _handleCheckUpdate,
